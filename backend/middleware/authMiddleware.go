@@ -1,12 +1,13 @@
 package middleware
 
 import (
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-func authMiddleware() gin.HandlerFunc {
+func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("Authorization")
 		if token == "" {
@@ -36,5 +37,5 @@ func authMiddleware() gin.HandlerFunc {
 }
 
 func getAllowedKey() string {
-	return ""
+	return os.Getenv("apikey")
 }
