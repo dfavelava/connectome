@@ -10,10 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type OllamaResource interface {
-	PostEmbed(c *gin.Context)
-}
-
 type OllamaResourceImpl struct {
 }
 
