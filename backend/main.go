@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 
-	"daybid-dev-service/middleware"
 	"daybid-dev-service/resources"
 
 	"github.com/gin-gonic/gin"
@@ -24,14 +23,7 @@ func main() {
 		})
 	})
 
-	ollamaResource := resources.NewOllamaResource()
-
-	protected := r.Group("/ollama")
-
-	protected.Use(middleware.AuthMiddleware())
-	{
-		protected.POST("/embed", ollamaResource.PostEmbed)
-	}
+	resources.InitOllamaResource(r)
 
 	r.Run()
 }

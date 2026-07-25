@@ -2,6 +2,7 @@ package resources
 
 import (
 	"bytes"
+	"daybid-dev-service/middleware"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -21,8 +22,17 @@ type EmbedRequest struct {
 	Input string `json:"input"`
 }
 
-func NewOllamaResource() *OllamaResourceImpl {
+func NewOllamaResource(r *gin.Engine) *OllamaResourceImpl {
 	return &OllamaResourceImpl{}
+}
+
+func InitOllamaResource(r *gin.Engine) {
+	resource := NewOllamaResource(r)
+
+	group := r.Group("/ollama")
+
+	group.Use(middleware.AuthMiddleware())
+	group.POST("/embed", resource.PostEmbed)
 }
 
 func (o *OllamaResourceImpl) PostEmbed(c *gin.Context) {
