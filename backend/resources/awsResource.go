@@ -1,7 +1,9 @@
 package resources
 
 import (
+	"bytes"
 	"context"
+	"daybid-dev-service/middleware"
 	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,7 +31,9 @@ func InitAWSResource(r *gin.Engine) {
 	resource.s3Client = s3.NewFromConfig(cfg)
 
 	group := r.Group("/aws")
+	group.Use(middleware.AuthMiddleware())
 	group.GET("/s3", resource.ListBuckets)
+	group.POST("/s3/upload", resource.TestUpload)
 }
 
 func (r *AWSResourceImpl) ListBuckets(ctx *gin.Context) {
@@ -41,4 +45,16 @@ func (r *AWSResourceImpl) ListBuckets(ctx *gin.Context) {
 	}
 
 	ctx.JSON(200, buckets)
+}
+
+func (r *AWSResourceImpl) TestUpload(ctx *gin.Context) {
+	_, err := r.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:        aws.String("daybid-dev"),
+		Key:           aws.String("test.txt"),
+		Body:          bytes.NewReader([]byte{}),
+		ContentLength: aws.Int64(0),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }
