@@ -24,6 +24,7 @@ func main() {
 	})
 
 	resources.InitOllamaResource(r)
+	resources.InitAWSResource(r)
 
 	r.Run()
 }
