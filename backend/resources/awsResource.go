@@ -57,4 +57,5 @@ func (r *AWSResourceImpl) TestUpload(ctx *gin.Context) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	ctx.JSON(204, nil)
 }
