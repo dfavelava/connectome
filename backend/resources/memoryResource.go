@@ -15,15 +15,15 @@ type MemoryResourceImpl struct {
 	s3Client *s3.Client
 }
 
-type CreateMemoryRequest struct {
-	Dir string `json:"dir"`
+type DeleteMemoryRequest struct {
+	Key string `json:"key"`
 }
 
-func NewMemoryResource(r *gin.Engine) *MemoryResourceImpl {
+func NewMemoryResource(r *gin.RouterGroup) *MemoryResourceImpl {
 	return &MemoryResourceImpl{}
 }
 
-func InitMemoryResource(r *gin.Engine) {
+func InitMemoryResource(r *gin.RouterGroup) {
 	resource := NewMemoryResource(r)
 
 	cfg, err := config.LoadDefaultConfig(context.TODO())
@@ -35,11 +35,18 @@ func InitMemoryResource(r *gin.Engine) {
 
 	group := r.Group("/memory")
 	group.POST("/", resource.write)
-	group.GET("/:key", resource.read)
+	group.GET("/", resource.read)
+	group.DELETE("/", resource.delete)
+	group.GET("/list", resource.list)
 }
 
 func (resource *MemoryResourceImpl) read(c *gin.Context) {
-	key := c.Param("key")
+	key := c.Query("key")
+
+	if key == "" {
+		c.JSON(500, gin.H{"error": "s3 key not specified"})
+		return
+	}
 
 	result, err := resource.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String("daybid-dev"),
@@ -95,4 +102,39 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"message": "success"})
+}
+
+func (resource *MemoryResourceImpl) list(c *gin.Context) {
+	res, err := resource.s3Client.ListObjects(context.TODO(), &s3.ListObjectsInput{
+		Bucket:    aws.String("daybid-dev"),
+		Delimiter: aws.String("/"),
+	})
+
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, res)
+}
+
+func (resource *MemoryResourceImpl) delete(c *gin.Context) {
+	var body DeleteMemoryRequest
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	key := body.Key
+
+	_, err := resource.s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String("daybid-dev"),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(204, gin.H{"message": "success"})
 }

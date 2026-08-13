@@ -23,9 +23,8 @@ func main() {
 		})
 	})
 
-	resources.InitOllamaResource(r)
-	resources.InitAWSResource(r)
-	resources.InitMemoryResource(r)
+	connectomeGroup := r.Group("/connectome")
+	resources.InitMemoryResource(connectomeGroup)
 
 	r.Run()
 }
