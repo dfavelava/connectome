@@ -1,18 +1,15 @@
 package resources
 
 import (
-	"context"
 	"fmt"
-	"log"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gin-gonic/gin"
+
+	"daybid-dev-service/managers"
 )
 
 type MemoryResourceImpl struct {
-	s3Client *s3.Client
+	s3Manager *managers.S3ManagerImpl
 }
 
 type DeleteMemoryRequest struct {
@@ -20,18 +17,12 @@ type DeleteMemoryRequest struct {
 }
 
 func NewMemoryResource(r *gin.RouterGroup) *MemoryResourceImpl {
-	return &MemoryResourceImpl{}
+	s3Manager := managers.InitS3Manager()
+	return &MemoryResourceImpl{s3Manager: s3Manager}
 }
 
 func InitMemoryResource(r *gin.RouterGroup) {
 	resource := NewMemoryResource(r)
-
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	resource.s3Client = s3.NewFromConfig(cfg)
 
 	group := r.Group("/memory")
 	group.POST("/", resource.write)
@@ -48,10 +39,7 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 		return
 	}
 
-	result, err := resource.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String("daybid-dev"),
-		Key:    aws.String(key),
-	})
+	result, err := resource.s3Manager.GetObject(key)
 
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -90,11 +78,7 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 	}
 	defer file.Close()
 
-	_, err = resource.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: aws.String("daybid-dev"),
-		Key:    aws.String(fileHeader.Filename),
-		Body:   file,
-	})
+	_, err = resource.s3Manager.PutObject(fileHeader.Filename, file)
 
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -105,10 +89,7 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 }
 
 func (resource *MemoryResourceImpl) list(c *gin.Context) {
-	res, err := resource.s3Client.ListObjects(context.TODO(), &s3.ListObjectsInput{
-		Bucket:    aws.String("daybid-dev"),
-		Delimiter: aws.String("/"),
-	})
+	res, err := resource.s3Manager.ListObjects()
 
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -126,10 +107,7 @@ func (resource *MemoryResourceImpl) delete(c *gin.Context) {
 	}
 	key := body.Key
 
-	_, err := resource.s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-		Bucket: aws.String("daybid-dev"),
-		Key:    aws.String(key),
-	})
+	_, err := resource.s3Manager.DeleteObject(key)
 
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
