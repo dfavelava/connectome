@@ -1,0 +1,18 @@
+services:
+  backend:
+    image: golang:1.26
+    working_dir: /app/backend
+    command: sh -c "go mod download && go run ."
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./backend/.env
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - .:/app
+    restart: unless-stopped
