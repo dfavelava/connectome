@@ -3,6 +3,7 @@ package resources
 import (
 	"fmt"
 
+	"daybid-dev-service/middleware"
 	"github.com/gin-gonic/gin"
 
 	"daybid-dev-service/managers"
@@ -25,6 +26,7 @@ func InitMemoryResource(r *gin.RouterGroup) {
 	resource := NewMemoryResource(r)
 
 	group := r.Group("/memory")
+	group.Use(middleware.AuthMiddleware())
 	group.POST("/", resource.write)
 	group.GET("/", resource.read)
 	group.DELETE("/", resource.delete)

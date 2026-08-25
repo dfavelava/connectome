@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.*
+backend/.env
+backend/.env.*
+!*.env.example
+!backend/.env.example
+.agents
+.codex
