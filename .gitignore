@@ -1,1 +1,33 @@
+# Local environment files
 .env
+.env.*
+**/.env
+**/.env.*
+!**/*.env.example
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+cover.out
+*.coverprofile
+.coverprofile
+bin/
+dist/
+build/
+
+# Logs and local runtime output
+*.log
+logs/
+tmp/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
