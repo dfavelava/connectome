@@ -1,13 +1,17 @@
 import json
 import os
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 from mcp.server import MCPServer
+from dotenv import load_dotenv
 
 DEFAULT_API_BASE_URL = "http://localhost:8080/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 USER_AGENT = "connectome/0.1.0"
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 mcp = MCPServer("connectome")
 
@@ -56,7 +60,7 @@ async def request(
 @mcp.tool()
 async def get_memory(key: str) -> str:
     """Retrieve memory content by key."""
-    response = await request("GET", "/memory", params={"key": key})
+    response = await request("GET", "/memory/", params={"key": key})
     return response.text
 
 
@@ -89,4 +93,4 @@ async def forget(key: str) -> str:
 
 
 def main() -> None:
-    mcp.run()
+    mcp.run(transport="stdio")
