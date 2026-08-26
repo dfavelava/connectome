@@ -1,9 +1,10 @@
 package resources
 
 import (
-	"fmt"
+	"io"
 
 	"daybid-dev-service/middleware"
+
 	"github.com/gin-gonic/gin"
 
 	"daybid-dev-service/managers"
@@ -49,21 +50,14 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 	}
 	defer result.Body.Close()
 
-	var contentLength int64
-	if result.ContentLength != nil {
-		contentLength = *result.ContentLength
+	bodyBytes, err := io.ReadAll(result.Body)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
 	}
 
-	contentType := "application/octet-stream"
-	if result.ContentType != nil {
-		contentType = *result.ContentType
-	}
+	content := string(bodyBytes)
 
-	extraHeaders := map[string]string{
-		"Content-Disposition": fmt.Sprintf(`attachment; filename="%s"`, key),
-	}
-
-	c.DataFromReader(200, contentLength, contentType, result.Body, extraHeaders)
+	c.JSON(200, gin.H{"content": content})
 }
 
 func (resource *MemoryResourceImpl) write(c *gin.Context) {
