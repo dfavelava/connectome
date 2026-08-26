@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from daybidmcp!")
+from .server import main, mcp
+
+__all__ = ["main", "mcp"]
