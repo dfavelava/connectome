@@ -108,7 +108,8 @@ async def remember(
     relationships: list[Relationship] | None = None,
 ) -> str:
     """Store memory content and return the generated key."""
-    memory_id = generate_id("mem")
+    # TODO: Check if memory already exists and update if found
+    memory_id = f"{generate_id("mem")}.md"
     now = datetime.now(UTC)
     memory_entities = entities or []
     memory_relationships = relationships or []
