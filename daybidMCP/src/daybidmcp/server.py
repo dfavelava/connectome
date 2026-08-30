@@ -1,12 +1,13 @@
-from datetime import datetime, UTC
 import httpx
 import json
 import os
 import uuid
-from dotenv import load_dotenv
+
+from datetime import UTC, datetime
 from io import BytesIO
-from mcp.server import MCPServer
 from pathlib import Path
+from dotenv import load_dotenv
+from mcp.server import MCPServer
 from pydantic import BaseModel, Field
 
 DEFAULT_API_BASE_URL = "http://localhost:8080/connectome"
@@ -78,13 +79,20 @@ def format_memory(
 def format_entity(entity: EntityWithMemories) -> str:
     return entity.model_dump_json(indent=2)
 
+
+def merge_memory_ids(existing: list[str] | None, new_memory_id: str) -> list[str]:
+    memory_ids = list(existing or [])
+    if new_memory_id not in memory_ids:
+        memory_ids.append(new_memory_id)
+    return memory_ids
+
 async def request(
     method: str,
     path: str,
     *,
     params: dict[str, str] | None = None,
     files: list[tuple[str, tuple[str, BytesIO, str]]] | dict[str, tuple[str, BytesIO, str]] | None = None,
-    json_body: dict[str, str] | None = None,
+    json_body: dict[str, object] | None = None,
 ) -> httpx.Response:
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
         response = await client.request(
@@ -97,6 +105,15 @@ async def request(
         )
         _ = response.raise_for_status()
         return response
+
+
+async def batch_read(keys: list[str]) -> dict[str, str]:
+    if not keys:
+        return {}
+
+    response = await request("POST", "/memory/batch/read", json_body={"keys": keys})
+    payload = response.json()
+    return payload.get("contents", {})
 
 
 @mcp.tool()
@@ -127,17 +144,23 @@ async def remember(
         now.isoformat(),
     )
 
+    entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]
+    existing_entity_contents = await batch_read(entity_keys)
+
     files: list[tuple[str, tuple[str, BytesIO, str]]] = [
         ("file", (memory_id, BytesIO(memory.encode("utf-8")), "text/plain; charset=utf-8"))
     ]
 
-    entity_keys: list[str] = []
-    for entity in memory_entities:
-        # TODO: Fetch entity if it exists and append this memory to its memory_ids
-        entity_id = f"ent_{entity.id}.json"
-        entity_keys.append(entity_id)
+    for entity, entity_id in zip(memory_entities, entity_keys):
+        existing_entity = existing_entity_contents.get(entity_id)
+        existing_memory_ids: list[str] | None = None
+        if existing_entity:
+            existing_memory_ids = EntityWithMemories.model_validate_json(existing_entity).memory_ids
 
-        entity_with_memories = EntityWithMemories(**entity.model_dump(), memory_ids=[memory_id])
+        entity_with_memories = EntityWithMemories(
+            **entity.model_dump(),
+            memory_ids=merge_memory_ids(existing_memory_ids, memory_id),
+        )
         files.append(
             ("file", (entity_id, BytesIO(format_entity(entity_with_memories).encode("utf-8")), "application/json"))
         )

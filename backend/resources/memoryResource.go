@@ -18,6 +18,11 @@ type MemoryResourceImpl struct {
 	s3Manager *managers.S3ManagerImpl
 }
 
+type BatchReadError struct {
+	Key   string
+	Error string
+}
+
 type BatchReadRequest struct {
 	Keys []string `json:"keys"`
 }
@@ -85,7 +90,7 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	contents := make(map[string]string, len(request.Keys))
-	errCh := make(chan error, len(request.Keys))
+	errCh := make(chan BatchReadError, len(request.Keys))
 
 	for _, key := range request.Keys {
 		wg.Add(1)
@@ -94,14 +99,14 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 
 			result, err := resource.s3Manager.GetObject(key)
 			if err != nil {
-				errCh <- fmt.Errorf("read %s: %w", key, err)
+				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read %s: %v", key, err)}
 				return
 			}
 			defer result.Body.Close()
 
 			bodyBytes, err := io.ReadAll(result.Body)
 			if err != nil {
-				errCh <- fmt.Errorf("read body %s: %w", key, err)
+				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read body %s: %v", key, err)}
 				return
 			}
 
@@ -114,15 +119,18 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 	wg.Wait()
 	close(errCh)
 
-	var errors []string
-	for err := range errCh {
-		if err != nil {
-			errors = append(errors, err.Error())
+	errors := make(map[string]string)
+	for batchErr := range errCh {
+		if batchErr.Error != "" {
+			errors[batchErr.Key] = batchErr.Error
 		}
 	}
 
 	if len(errors) > 0 {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("batch read failed: %s", strings.Join(errors, "; "))})
+		c.JSON(207, gin.H{
+			"contents": contents,
+			"errors":   errors,
+		})
 		return
 	}
 
