@@ -21,6 +21,8 @@ class Entity(BaseModel):
     id: str
     name: str | None = None
 
+class EntityWithMemories(Entity):
+    memory_ids: list[str] | None = None
 
 class Relationship(BaseModel):
     source: Entity
@@ -73,12 +75,15 @@ def format_memory(
     )
     return memory.model_dump_json(indent=2)
 
+def format_entity(entity: EntityWithMemories) -> str:
+    return entity.model_dump_json(indent=2)
+
 async def request(
     method: str,
     path: str,
     *,
     params: dict[str, str] | None = None,
-    files: dict[str, tuple[str, BytesIO, str]] | None = None,
+    files: list[tuple[str, tuple[str, BytesIO, str]]] | dict[str, tuple[str, BytesIO, str]] | None = None,
     json_body: dict[str, str] | None = None,
 ) -> httpx.Response:
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
@@ -109,7 +114,7 @@ async def remember(
 ) -> str:
     """Store memory content and return the generated key."""
     # TODO: Check if memory already exists and update if found
-    memory_id = f"{generate_id("mem")}.md"
+    memory_id = f"{generate_id('mem')}.md"
     now = datetime.now(UTC)
     memory_entities = entities or []
     memory_relationships = relationships or []
@@ -122,13 +127,34 @@ async def remember(
         now.isoformat(),
     )
 
-    file_obj = BytesIO(memory.encode("utf-8"))
+    files: list[tuple[str, tuple[str, BytesIO, str]]] = [
+        ("file", (memory_id, BytesIO(memory.encode("utf-8")), "text/plain; charset=utf-8"))
+    ]
+
+    entity_keys: list[str] = []
+    for entity in memory_entities:
+        # TODO: Fetch entity if it exists and append this memory to its memory_ids
+        entity_id = f"ent_{entity.id}.json"
+        entity_keys.append(entity_id)
+
+        entity_with_memories = EntityWithMemories(**entity.model_dump(), memory_ids=[memory_id])
+        files.append(
+            ("file", (entity_id, BytesIO(format_entity(entity_with_memories).encode("utf-8")), "application/json"))
+        )
+
     _ = await request(
         "POST",
-        "/memory/",
-        files={"file": (memory_id, file_obj, "text/plain; charset=utf-8")},
+        "/memory/batch",
+        files=files,
     )
-    return json.dumps({"message": "stored", "key": memory_id, "memory": json.loads(memory)})
+    return json.dumps(
+        {
+            "message": "stored",
+            "key": memory_id,
+            "memory": json.loads(memory),
+            "entity_keys": entity_keys,
+        }
+    )
 
 
 @mcp.tool()
