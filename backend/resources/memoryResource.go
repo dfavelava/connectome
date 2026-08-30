@@ -18,6 +18,10 @@ type MemoryResourceImpl struct {
 	s3Manager *managers.S3ManagerImpl
 }
 
+type BatchReadRequest struct {
+	Keys []string `json:"keys"`
+}
+
 type DeleteMemoryRequest struct {
 	Key string `json:"key"`
 }
@@ -34,6 +38,7 @@ func InitMemoryResource(r *gin.RouterGroup) {
 	group.Use(middleware.AuthMiddleware())
 	group.POST("/", resource.write)
 	group.POST("/batch", resource.batchWrite)
+	group.POST("/batch/read", resource.batchRead)
 	group.GET("/", resource.read)
 	group.DELETE("/", resource.delete)
 	group.GET("/list", resource.list)
@@ -63,6 +68,65 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 	content := string(bodyBytes)
 
 	c.JSON(200, gin.H{"content": content})
+}
+
+func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
+	var request BatchReadRequest
+	if err := c.BindJSON(&request); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(request.Keys) == 0 {
+		c.JSON(400, gin.H{"error": "no keys provided"})
+		return
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	contents := make(map[string]string, len(request.Keys))
+	errCh := make(chan error, len(request.Keys))
+
+	for _, key := range request.Keys {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+
+			result, err := resource.s3Manager.GetObject(key)
+			if err != nil {
+				errCh <- fmt.Errorf("read %s: %w", key, err)
+				return
+			}
+			defer result.Body.Close()
+
+			bodyBytes, err := io.ReadAll(result.Body)
+			if err != nil {
+				errCh <- fmt.Errorf("read body %s: %w", key, err)
+				return
+			}
+
+			mu.Lock()
+			contents[key] = string(bodyBytes)
+			mu.Unlock()
+		}(key)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	var errors []string
+	for err := range errCh {
+		if err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+
+	if len(errors) > 0 {
+		c.JSON(500, gin.H{"error": fmt.Sprintf("batch read failed: %s", strings.Join(errors, "; "))})
+		return
+	}
+
+	c.JSON(200, gin.H{"contents": contents})
 }
 
 func (resource *MemoryResourceImpl) write(c *gin.Context) {

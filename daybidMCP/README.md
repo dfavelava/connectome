@@ -53,5 +53,6 @@ The MCP tools call these authenticated backend routes:
 - `GET /connectome/memory?key=...`
 - `POST /connectome/memory/`
 - `POST /connectome/memory/batch`
+- `POST /connectome/memory/batch/read`
 - `GET /connectome/memory/list`
 - `DELETE /connectome/memory/`
