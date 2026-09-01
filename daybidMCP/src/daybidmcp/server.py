@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import uuid
+import yaml
 
 from datetime import UTC, datetime
 from io import BytesIO
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 DEFAULT_API_BASE_URL = "http://localhost:8080/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 USER_AGENT = "connectome/0.1.0"
+MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
 
 _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -26,17 +28,28 @@ class EntityWithMemories(Entity):
     memory_ids: list[str] | None = None
 
 class Relationship(BaseModel):
-    source: Entity
-    target: Entity
-    type: str | None = None
+    subjectEntityId: str
+    predicate: str
+    objectEntityId: str | None = None
 
+class MemorySource(BaseModel):
+    type: str
+    created_at: str
+
+class MemoryMetadata(BaseModel):
+    version: str = MEMORY_SCHEMA_VERSION
+    id: str | None = None
+    type: str
+    created_at: str
+
+    source: MemorySource
+    entities: list[str] = Field(default_factory=list)
+    relationships: list[Relationship] = Field(default_factory=list)
 
 class Memory(BaseModel):
     id: str
     content: str
-    entities: list[Entity] = Field(default_factory=list)
-    relationships: list[Relationship] = Field(default_factory=list)
-    properties: dict[str, str]
+    metadata: MemoryMetadata
 
 def get_api_base_url() -> str:
     return os.getenv("DAYBID_API_BASE_URL", DEFAULT_API_BASE_URL).rstrip("/")
@@ -67,14 +80,21 @@ def format_memory(
     relationships: list[Relationship],
     created_at: str,
 ) -> str:
-    memory = Memory(
+    metadata = MemoryMetadata(
         id=id,
-        content=content,
-        entities=entities,
+        type="",
+        created_at=created_at,
+        source=MemorySource(type="", created_at=created_at),
+        entities=[entity.id for entity in entities],
         relationships=relationships,
-        properties={"created_at": created_at},
     )
-    return memory.model_dump_json(indent=2)
+    yaml_data = yaml.dump(metadata.model_dump(mode="json"), sort_keys=False)
+    return f"""
+    ---
+    {yaml_data}
+    ---
+    {content}
+    """
 
 def format_entity(entity: EntityWithMemories) -> str:
     return entity.model_dump_json(indent=2)
