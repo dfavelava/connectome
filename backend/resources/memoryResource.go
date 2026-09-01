@@ -2,7 +2,6 @@ package resources
 
 import (
 	"fmt"
-	"io"
 	"mime/multipart"
 	"strings"
 	"sync"
@@ -14,8 +13,16 @@ import (
 	"daybid-dev-service/managers"
 )
 
+type ManagerType string
+
+const (
+	ManagerTypeS3    ManagerType = "s3"
+	ManagerTypeLocal ManagerType = "local"
+)
+
 type MemoryResourceImpl struct {
-	s3Manager *managers.S3ManagerImpl
+	s3Manager  *managers.S3ManagerImpl
+	managerMap map[ManagerType]managers.MemoryManager
 }
 
 type BatchReadError struct {
@@ -33,7 +40,15 @@ type DeleteMemoryRequest struct {
 
 func NewMemoryResource(r *gin.RouterGroup) *MemoryResourceImpl {
 	s3Manager := managers.InitS3Manager()
-	return &MemoryResourceImpl{s3Manager: s3Manager}
+	localManager := managers.InitLocalFsManager()
+	managerMap := make(map[ManagerType]managers.MemoryManager)
+	managerMap[ManagerTypeS3] = s3Manager
+	managerMap[ManagerTypeLocal] = localManager
+	return &MemoryResourceImpl{managerMap: managerMap}
+}
+
+func (resource *MemoryResourceImpl) GetManager() managers.MemoryManager {
+	return resource.managerMap[ManagerTypeS3]
 }
 
 func InitMemoryResource(r *gin.RouterGroup) {
@@ -57,20 +72,11 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 		return
 	}
 
-	result, err := resource.s3Manager.GetObject(key)
-
+	content, err := resource.s3Manager.GetObject(key)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	defer result.Body.Close()
-
-	bodyBytes, err := io.ReadAll(result.Body)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-	}
-
-	content := string(bodyBytes)
 
 	c.JSON(200, gin.H{"content": content})
 }
@@ -97,21 +103,14 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 		go func(key string) {
 			defer wg.Done()
 
-			result, err := resource.s3Manager.GetObject(key)
+			content, err := resource.s3Manager.GetObject(key)
 			if err != nil {
 				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read %s: %v", key, err)}
 				return
 			}
-			defer result.Body.Close()
-
-			bodyBytes, err := io.ReadAll(result.Body)
-			if err != nil {
-				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read body %s: %v", key, err)}
-				return
-			}
 
 			mu.Lock()
-			contents[key] = string(bodyBytes)
+			contents[key] = content
 			mu.Unlock()
 		}(key)
 	}
@@ -151,9 +150,7 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 	}
 	defer file.Close()
 
-	_, err = resource.s3Manager.PutObject(fileHeader.Filename, file)
-
-	if err != nil {
+	if err := resource.s3Manager.PutObject(fileHeader.Filename, file); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -189,7 +186,7 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 			}
 			defer file.Close()
 
-			if _, err := resource.s3Manager.PutObject(fileHeader.Filename, file); err != nil {
+			if err := resource.s3Manager.PutObject(fileHeader.Filename, file); err != nil {
 				errCh <- fmt.Errorf("upload %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)

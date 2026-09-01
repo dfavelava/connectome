@@ -2,6 +2,7 @@ package managers
 
 import (
 	"context"
+	"io"
 	"log"
 	"mime/multipart"
 
@@ -26,19 +27,32 @@ func InitS3Manager() *S3ManagerImpl {
 	return NewS3Manager(&cfg)
 }
 
-func (manager *S3ManagerImpl) GetObject(key string) (*s3.GetObjectOutput, error) {
-	return manager.client.GetObject(context.TODO(), &s3.GetObjectInput{
+func (manager *S3ManagerImpl) GetObject(key string) (string, error) {
+	result, err := manager.client.GetObject(context.TODO(), &s3.GetObjectInput{
 		Bucket: aws.String("daybid-dev"),
 		Key:    aws.String(key),
 	})
+	if err != nil {
+		return "", err
+	}
+	defer result.Body.Close()
+
+	bodyBytes, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", err
+	}
+
+	content := string(bodyBytes)
+	return content, nil
 }
 
-func (manager *S3ManagerImpl) PutObject(key string, file multipart.File) (*s3.PutObjectOutput, error) {
-	return manager.client.PutObject(context.TODO(), &s3.PutObjectInput{
+func (manager *S3ManagerImpl) PutObject(key string, file multipart.File) error {
+	_, err := manager.client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: aws.String("daybid-dev"),
 		Key:    aws.String(key),
 		Body:   file,
 	})
+	return err
 }
 
 func (manager *S3ManagerImpl) DeleteObject(key string) (*s3.DeleteObjectOutput, error) {
