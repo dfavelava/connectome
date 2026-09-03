@@ -79,7 +79,7 @@ def format_memory(
     entities: list[Entity],
     relationships: list[Relationship],
     created_at: str,
-) -> str:
+) -> tuple[str, dict[str, object]]:
     metadata = MemoryMetadata(
         id=id,
         type="",
@@ -88,13 +88,19 @@ def format_memory(
         entities=[entity.id for entity in entities],
         relationships=relationships,
     )
+    metadata_payload = metadata.model_dump(mode="json")
     yaml_data = yaml.dump(metadata.model_dump(mode="json"), sort_keys=False)
-    return f"""
+    document = f"""
     ---
     {yaml_data}
     ---
     {content}
     """
+    return document, {
+        "id": id,
+        "content": content,
+        "metadata": metadata_payload,
+    }
 
 def format_entity(entity: EntityWithMemories) -> str:
     return entity.model_dump_json(indent=2)
@@ -156,7 +162,7 @@ async def remember(
     memory_entities = entities or []
     memory_relationships = relationships or []
 
-    memory = format_memory(
+    memory, memory_payload = format_memory(
         memory_id,
         content,
         memory_entities,
@@ -194,7 +200,7 @@ async def remember(
         {
             "message": "stored",
             "key": memory_id,
-            "memory": json.loads(memory),
+            "memory": memory_payload,
             "entity_keys": entity_keys,
         }
     )

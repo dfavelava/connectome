@@ -38,3 +38,6 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local Connectome memories
+.connectome

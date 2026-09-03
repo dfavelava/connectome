@@ -13,4 +13,6 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    volumes:
+      - ./.connectome:/root/.connectome
     restart: unless-stopped

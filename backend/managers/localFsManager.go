@@ -50,3 +50,37 @@ func (l *LocalFsManagerImpl) PutObject(path string, file multipart.File) error {
 	}
 	return nil
 }
+
+func (l *LocalFsManagerImpl) DeleteObject(path string) error {
+	fullPath := filepath.Join(l.basePath, path)
+	return os.Remove(fullPath)
+}
+
+func (l *LocalFsManagerImpl) ListObjects() (*MemoryListResult, error) {
+	contents := []MemoryListItem{}
+
+	err := filepath.WalkDir(l.basePath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		relativePath, err := filepath.Rel(l.basePath, path)
+		if err != nil {
+			return err
+		}
+
+		contents = append(contents, MemoryListItem{Key: filepath.ToSlash(relativePath)})
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &MemoryListResult{Contents: contents}, nil
+		}
+		return nil, err
+	}
+
+	return &MemoryListResult{Contents: contents}, nil
+}

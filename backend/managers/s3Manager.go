@@ -55,16 +55,30 @@ func (manager *S3ManagerImpl) PutObject(key string, file multipart.File) error {
 	return err
 }
 
-func (manager *S3ManagerImpl) DeleteObject(key string) (*s3.DeleteObjectOutput, error) {
-	return manager.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+func (manager *S3ManagerImpl) DeleteObject(key string) error {
+	_, err := manager.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 		Bucket: aws.String("daybid-dev"),
 		Key:    aws.String(key),
 	})
+	return err
 }
 
-func (manager *S3ManagerImpl) ListObjects() (*s3.ListObjectsOutput, error) {
-	return manager.client.ListObjects(context.TODO(), &s3.ListObjectsInput{
+func (manager *S3ManagerImpl) ListObjects() (*MemoryListResult, error) {
+	result, err := manager.client.ListObjects(context.TODO(), &s3.ListObjectsInput{
 		Bucket:    aws.String("daybid-dev"),
 		Delimiter: aws.String("/"),
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	contents := make([]MemoryListItem, 0, len(result.Contents))
+	for _, item := range result.Contents {
+		if item.Key == nil {
+			continue
+		}
+		contents = append(contents, MemoryListItem{Key: *item.Key})
+	}
+
+	return &MemoryListResult{Contents: contents}, nil
 }
