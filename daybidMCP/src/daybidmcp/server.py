@@ -21,16 +21,20 @@ _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 mcp = MCPServer("connectome")
 
 class Entity(BaseModel):
-    id: str
-    name: str | None = None
+    """An entity mentioned in the memory content."""
+
+    id: str = Field(description="A stable unique identifier for the entity, such as a slug, username, or system ID. Reuse the same ID across memories to link them together.")
+    name: str | None = Field(default=None, description="A human-readable display name for the entity, if one is available.")
 
 class EntityWithMemories(Entity):
     memory_ids: list[str] | None = None
 
 class Relationship(BaseModel):
-    subjectEntityId: str
-    predicate: str
-    objectEntityId: str | None = None
+    """A directed relationship between entities extracted from the memory."""
+
+    subjectEntityId: str = Field(description="The entity ID that acts as the subject or source of the relationship.")
+    predicate: str = Field(description="The relationship label, action, or edge type connecting the subject to the object, such as 'works_with' or 'likes'.")
+    objectEntityId: str | None = Field(default=None, description="The entity ID that acts as the object or target of the relationship. Leave null when the relationship has no explicit target entity.")
 
 class MemorySource(BaseModel):
     type: str
@@ -144,18 +148,18 @@ async def batch_read(keys: list[str]) -> dict[str, str]:
 
 @mcp.tool()
 async def get_memory(key: str) -> str:
-    """Retrieve memory content by key."""
+    """Fetch a stored memory document or entity record by key and return the backend JSON response."""
     response = await request("GET", "/memory/", params={"key": key})
     return response.text
 
 
 @mcp.tool()
 async def remember(
-    content: str,
-    entities: list[Entity] | None = None,
-    relationships: list[Relationship] | None = None,
+    content: str = Field(description="The raw memory content to store as the main document body."),
+    entities: list[Entity] | None = Field(default=None, description="Entities explicitly mentioned in the memory. Each entity should use a stable ID so future memories can merge into the same entity record."),
+    relationships: list[Relationship] | None = Field(default=None, description="Directed relationships between the provided entities. Use this to capture how entities are connected within the memory."),
 ) -> str:
-    """Store memory content and return the generated key."""
+    """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
     memory_id = f"{generate_id('mem')}.md"
     now = datetime.now(UTC)
@@ -208,7 +212,7 @@ async def remember(
 
 @mcp.tool()
 async def browse_all() -> str:
-    """List stored memory keys."""
+    """List all stored memory and entity keys and return them as JSON: {\"keys\": [...]}."""
     response = await request("GET", "/memory/list")
     payload = response.json()
     keys = [item["Key"] for item in payload.get("Contents", []) if "Key" in item]
@@ -217,7 +221,7 @@ async def browse_all() -> str:
 
 @mcp.tool()
 async def forget(key: str) -> str:
-    """Delete a memory by key."""
+    """Delete a stored memory or entity record by key and return JSON confirming the deletion."""
     _ = await request("DELETE", "/memory/", json_body={"key": key})
     return json.dumps({"message": "deleted", "key": key})
 
