@@ -16,14 +16,15 @@ func main() {
 	}
 
 	r := gin.Default()
+	baseGroup := r.Group("/api")
 
-	r.GET("/", func(c *gin.Context) {
+	baseGroup.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "Hello, World!",
 		})
 	})
 
-	connectomeGroup := r.Group("/connectome")
+	connectomeGroup := baseGroup.Group("/connectome")
 	resources.InitMemoryResource(connectomeGroup)
 
 	r.Run()
