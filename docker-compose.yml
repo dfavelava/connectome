@@ -13,6 +13,7 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
     volumes:
       - ./.connectome:/root/.connectome
     restart: unless-stopped
@@ -20,8 +21,6 @@ services:
   ollama:
       image: ollama/ollama:latest
       container_name: ollama
-      ports:
-        - "11434:11434"
       volumes:
         - ./.ollama:/root/.ollama
       restart: unless-stopped

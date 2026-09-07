@@ -20,7 +20,7 @@ func NewOllamaManager() *OllamaManager {
 	return &OllamaManager{ollamaClient: client}
 }
 
-func (o *OllamaManager) embed(input string) ([]float32, error) {
+func (o *OllamaManager) Embed(input string) ([]float32, error) {
 	body := api.EmbedRequest{Model: EMBEDDING_MODEL, Input: input}
 
 	res, err := o.ollamaClient.Embed(context.TODO(), &body)

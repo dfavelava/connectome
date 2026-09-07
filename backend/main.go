@@ -25,7 +25,10 @@ func main() {
 	})
 
 	connectomeGroup := baseGroup.Group("/connectome")
+	llmGroup := baseGroup.Group("/llm")
+
 	resources.InitMemoryResource(connectomeGroup)
+	resources.InitLLMResource(llmGroup)
 
 	r.Run()
 }
