@@ -39,5 +39,6 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Local Connectome memories
+# Docker Volumes
 .connectome
+.ollama
