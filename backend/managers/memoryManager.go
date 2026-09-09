@@ -3,7 +3,8 @@ package managers
 import "mime/multipart"
 
 type MemoryListItem struct {
-	Key string `json:"Key"`
+	Key     string  `json:"Key"`
+	Preview *string `json:"Preview"`
 }
 
 type MemoryListResult struct {

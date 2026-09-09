@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+const previewLength = 1024
+
 type LocalFsManagerImpl struct {
 	basePath string
 	fsys     fs.FS
@@ -22,6 +24,21 @@ func NewLocalFsManager() *LocalFsManagerImpl {
 
 func InitLocalFsManager() *LocalFsManagerImpl {
 	return NewLocalFsManager()
+}
+
+func (l *LocalFsManagerImpl) GetPreview(path string) (string, error) {
+	file, err := l.fsys.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	preview, err := io.ReadAll(io.LimitReader(file, previewLength))
+	if err != nil {
+		return "", err
+	}
+
+	return string(preview), nil
 }
 
 func (l *LocalFsManagerImpl) GetObject(path string) (string, error) {
@@ -72,7 +89,12 @@ func (l *LocalFsManagerImpl) ListObjects() (*MemoryListResult, error) {
 			return err
 		}
 
-		contents = append(contents, MemoryListItem{Key: filepath.ToSlash(relativePath)})
+		preview, err := l.GetPreview(filepath.ToSlash(relativePath))
+		if err != nil {
+			return err
+		}
+
+		contents = append(contents, MemoryListItem{Key: filepath.ToSlash(relativePath), Preview: &preview})
 		return nil
 	})
 	if err != nil {
