@@ -1,6 +1,6 @@
-# Daybid
+# Connectome
 
-Daybid is a connectome memory service with a Go HTTP backend and an optional Python MCP server. Memories can be stored in Amazon S3 or on the local filesystem, and the backend can use Ollama for embeddings.
+Connectome is a memory service with a Go HTTP backend and an optional Python MCP server. Memories can be stored in Amazon S3 or on the local filesystem, and the backend can use Ollama for embeddings.
 
 ## Requirements
 
@@ -103,4 +103,3 @@ uv run mcp dev connectome.py
 - `daybidMCP/` — Python MCP server and client-side memory formatting
 - `docker-compose.yml` — backend and Ollama services
 - `.connectome/` — local memory volume used by the local storage manager
-

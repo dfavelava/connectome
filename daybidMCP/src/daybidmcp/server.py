@@ -212,10 +212,14 @@ async def remember(
 
 @mcp.tool()
 async def browse_all() -> str:
-    """List all stored memory and entity keys and return them as JSON: {\"keys\": [...]}."""
+    """List all stored memory and entity keys and return them as JSON with optional previews."""
     response = await request("GET", "/memory/list")
     payload = response.json()
-    keys = [item["Key"] for item in payload.get("Contents", []) if "Key" in item]
+    keys = [
+        {"key": item["Key"], "preview": item.get("Preview")}
+        for item in payload.get("Contents", [])
+        if "Key" in item
+    ]
     return json.dumps({"keys": keys})
 
 
