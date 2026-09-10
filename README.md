@@ -141,6 +141,16 @@ launches the MCP Inspector):
 uv run mcp dev connectome.py
 ```
 
+Run the MCP server tests with:
+
+```bash
+cd daybidMCP
+uv run pytest
+```
+
+The end-to-end test builds and runs the Go backend with the local storage
+manager, so it needs the Go toolchain on `PATH` (it is skipped otherwise).
+
 ## Project layout
 
 - `backend/` — Go API, storage managers, authentication, and Ollama integration
