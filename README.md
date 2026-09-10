@@ -39,6 +39,11 @@ For S3, configure `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION`
 
 ## API
 
+All backend routes are served under the `/api` base group. Memory routes live under
+the `/api/connectome` prefix and LLM routes under `/api/llm`. This is the canonical
+statement of the API prefix; other docs and the MCP server's `DEFAULT_API_BASE_URL`
+should match it.
+
 Memory endpoints are authenticated with `Authorization: Bearer <apikey>`:
 
 ```text
