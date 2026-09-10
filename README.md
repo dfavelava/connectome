@@ -32,10 +32,10 @@ The API is available at `http://localhost:8080`. The repository’s `.connectome
 
 Set `MEMORY_MANAGER` in `backend/.env` to one of:
 
-- `s3` (default): stores objects in the `daybid-dev` S3 bucket.
-- `local`: stores objects under `$HOME/.connectome`.
+- `local` (default in `backend/.env.example`): stores objects under `$HOME/.connectome`. Needs no AWS credentials, so `docker compose up --build` works out of the box.
+- `s3`: stores objects in the `daybid-dev` S3 bucket. **Requires** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` in the root `.env` or your shell environment; the Compose file passes these through to the backend. The backend will fail to start if `MEMORY_MANAGER=s3` and no credentials are available.
 
-For S3, configure `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` in the root `.env` or your shell environment. The Compose file passes these values to the backend.
+> Note: when `MEMORY_MANAGER` is unset, the backend falls back to `s3`. The provided `backend/.env.example` sets it to `local` explicitly.
 
 ## API
 

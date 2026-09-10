@@ -1,8 +1,10 @@
 package resources
 
 import (
+	"errors"
 	"fmt"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -78,13 +80,17 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 	key := c.Query("key")
 
 	if key == "" {
-		c.JSON(500, gin.H{"error": "memory key not specified"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "memory key not specified"})
 		return
 	}
 
 	content, err := resource.manager.GetObject(key)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		if errors.Is(err, managers.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", key)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
