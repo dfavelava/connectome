@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from mcp.server import MCPServer
 from pydantic import BaseModel, Field
 
-DEFAULT_API_BASE_URL = "http://localhost:8080/connectome"
+DEFAULT_API_BASE_URL = "http://localhost:8080/api/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 USER_AGENT = "connectome/0.1.0"
 MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
