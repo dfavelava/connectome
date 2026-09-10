@@ -7,14 +7,29 @@ import yaml
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Literal, get_args
 from dotenv import load_dotenv
 from mcp.server import MCPServer
 from pydantic import BaseModel, Field
 
-DEFAULT_API_BASE_URL = "http://localhost:8080/connectome"
+DEFAULT_API_BASE_URL = "http://localhost:8080/api/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 USER_AGENT = "connectome/0.1.0"
 MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
+
+# The kind of thing a memory records. Kept deliberately small; extend as real
+# usage demands rather than guessing up front.
+#   note       - freeform observation with no stronger structure
+#   fact       - a discrete, durable statement of fact
+#   preference - how the user wants things done
+#   event      - something that happened at a point in time
+MemoryType = Literal["note", "fact", "preference", "event"]
+MEMORY_TYPES: tuple[str, ...] = get_args(MemoryType)
+DEFAULT_MEMORY_TYPE: MemoryType = "note"
+
+# Identifies where a memory came from. Every memory written through this server
+# originates from an MCP client.
+MEMORY_SOURCE_TYPE = "mcp"
 
 _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -83,23 +98,19 @@ def format_memory(
     entities: list[Entity],
     relationships: list[Relationship],
     created_at: str,
+    memory_type: str = DEFAULT_MEMORY_TYPE,
 ) -> tuple[str, dict[str, object]]:
     metadata = MemoryMetadata(
         id=id,
-        type="",
+        type=memory_type,
         created_at=created_at,
-        source=MemorySource(type="", created_at=created_at),
+        source=MemorySource(type=MEMORY_SOURCE_TYPE, created_at=created_at),
         entities=[entity.id for entity in entities],
         relationships=relationships,
     )
     metadata_payload = metadata.model_dump(mode="json")
-    yaml_data = yaml.dump(metadata.model_dump(mode="json"), sort_keys=False)
-    document = f"""
-    ---
-    {yaml_data}
-    ---
-    {content}
-    """
+    yaml_data = yaml.dump(metadata_payload, sort_keys=False).strip("\n")
+    document = f"---\n{yaml_data}\n---\n{content}\n"
     return document, {
         "id": id,
         "content": content,
@@ -158,6 +169,7 @@ async def remember(
     content: str = Field(description="The raw memory content to store as the main document body."),
     entities: list[Entity] | None = Field(default=None, description="Entities explicitly mentioned in the memory. Each entity should use a stable ID so future memories can merge into the same entity record."),
     relationships: list[Relationship] | None = Field(default=None, description="Directed relationships between the provided entities. Use this to capture how entities are connected within the memory."),
+    memory_type: MemoryType = Field(default=DEFAULT_MEMORY_TYPE, description="The kind of memory: 'note' for a freeform observation, 'fact' for a durable statement of fact, 'preference' for how the user wants things done, or 'event' for something that happened at a point in time."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -172,6 +184,7 @@ async def remember(
         memory_entities,
         memory_relationships,
         now.isoformat(),
+        memory_type,
     )
 
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]

@@ -1,6 +1,7 @@
 package managers
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,5 +48,21 @@ func TestLocalFsManagerListObjectsIncludesPreview(t *testing.T) {
 	}
 	if *item.Preview != expectedPreview {
 		t.Fatalf("unexpected preview length/content: got %d bytes", len(*item.Preview))
+	}
+}
+
+func TestLocalFsManagerGetObjectMissingReturnsErrNotFound(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	connectomeDir := filepath.Join(tempHome, ".connectome")
+	if err := os.MkdirAll(connectomeDir, 0o755); err != nil {
+		t.Fatalf("create connectome dir: %v", err)
+	}
+
+	manager := NewLocalFsManager()
+	_, err := manager.GetObject("does-not-exist.txt")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

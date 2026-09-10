@@ -146,6 +146,7 @@ async def _roundtrip(backend: Backend) -> None:
             content="Ada enjoys analytical engines.",
             entities=[ada],
             relationships=[],
+            memory_type="fact",
         )
     )
     memory_key = first["key"]
@@ -158,6 +159,7 @@ async def _roundtrip(backend: Backend) -> None:
     metadata, body = _parse_frontmatter(memory_path.read_text())
     assert metadata["version"] == "connectome/memory/0.1"
     assert metadata["id"] == memory_key
+    assert metadata["type"] == "fact"
     assert metadata["entities"] == ["ada"]
     assert metadata["relationships"] == []
     assert metadata["created_at"]
@@ -177,6 +179,7 @@ async def _roundtrip(backend: Backend) -> None:
             content="Ada wrote the first algorithm.",
             entities=[ada],
             relationships=[],
+            memory_type="fact",
         )
     )
     second_key = second["key"]

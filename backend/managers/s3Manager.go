@@ -2,6 +2,7 @@ package managers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"mime/multipart"
@@ -9,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type S3ManagerImpl struct {
@@ -33,6 +35,11 @@ func (manager *S3ManagerImpl) GetObject(key string) (string, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		var noSuchKey *types.NoSuchKey
+		var notFound *types.NotFound
+		if errors.As(err, &noSuchKey) || errors.As(err, &notFound) {
+			return "", ErrNotFound
+		}
 		return "", err
 	}
 	defer result.Body.Close()
