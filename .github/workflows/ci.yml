@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt reported unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daybidMCP
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: daybidMCP/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run ty check
+      - run: uv run pytest
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Seed env files
+        run: |
+          cp .env.example .env
+          cp backend/.env.example backend/.env
+      - run: docker compose build
