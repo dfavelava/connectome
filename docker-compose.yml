@@ -8,8 +8,11 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # Storage backend is configured via MEMORY_MANAGER in backend/.env
+      # (defaults to "local", which needs no AWS creds). The AWS_* values below
+      # are only needed when MEMORY_MANAGER=s3; they default to empty otherwise.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}

@@ -1,6 +1,7 @@
 package managers
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -44,6 +45,9 @@ func (l *LocalFsManagerImpl) GetPreview(path string) (string, error) {
 func (l *LocalFsManagerImpl) GetObject(path string) (string, error) {
 	data, err := fs.ReadFile(l.fsys, path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", ErrNotFound
+		}
 		return "", err
 	}
 	return string(data), nil
