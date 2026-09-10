@@ -20,12 +20,44 @@ services:
     volumes:
       - ./.connectome:/root/.connectome
     restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      # Block startup until the embedding model has been pulled into the
+      # shared ./.ollama volume, so the first /api/llm/embed call succeeds.
+      ollama-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/api/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
 
   ollama:
-      image: ollama/ollama:latest
-      container_name: ollama
-      volumes:
-        - ./.ollama:/root/.ollama
-      restart: unless-stopped
-      environment:
-        OLLAMA_HOST: 0.0.0.0
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ./.ollama:/root/.ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  # One-shot helper: waits for Ollama to be healthy, pulls the embedding model
+  # the backend needs, then exits 0. Runs on every `docker compose up`; the pull
+  # is a no-op once the model is present in the ./.ollama volume.
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    restart: "no"
