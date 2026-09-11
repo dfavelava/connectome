@@ -21,6 +21,8 @@ services:
       - ./.connectome:/root/.connectome
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy
       ollama:
         condition: service_healthy
       # Block startup until the embedding model has been pulled into the
@@ -29,6 +31,20 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/api/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./.postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 20
