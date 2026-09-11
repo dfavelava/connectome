@@ -33,7 +33,17 @@ MEMORY_SOURCE_TYPE = "mcp"
 
 _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
-mcp = MCPServer("connectome")
+mcp = MCPServer(
+    "connectome",
+    instructions="""Use this server proactively and liberally, not just when explicitly
+asked to "remember" something. Call `remember` whenever you learn a durable fact,
+a stated preference, a correction to how you should behave, or a notable event —
+during any conversation, not only when told to. Prefer several small, well-typed
+memories (note/fact/preference/event) over one large dump. Before writing, consider
+calling `browse_all` or `get_memory` to check whether something similar already
+exists, to avoid duplicates. Call `browse_all` early in a conversation to recall
+relevant context before assuming you're starting fresh.""",
+)
 
 class Entity(BaseModel):
     """An entity mentioned in the memory content."""
