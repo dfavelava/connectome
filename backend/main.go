@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"daybid-dev-service/managers"
 	"daybid-dev-service/resources"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,8 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: .env file not loaded: %v", err)
 	}
+
+	managers.NewPostgresManager()
 
 	r := gin.Default()
 	baseGroup := r.Group("/api")

@@ -44,3 +44,4 @@ Thumbs.db
 # Docker Volumes
 .connectome
 .ollama
+.postgres
