@@ -62,10 +62,11 @@ jobs:
       run:
         working-directory: daybidMCP
     # The end-to-end test builds and runs the real Go backend binary, which
-    # now connects to Postgres on boot (see backend/managers/postgresManager.go).
-    # These match the defaults that manager falls back to when POSTGRES_* env
-    # vars aren't set, so the e2e test's backend subprocess can connect without
-    # any extra wiring here.
+    # now connects to Postgres on boot (see backend/managers/postgresManager.go)
+    # and, since memoryResource embeds/indexes on every write (Phase 1B), calls
+    # out to Ollama on every remember. These match the defaults the backend
+    # falls back to when POSTGRES_*/OLLAMA_HOST env vars aren't set, so the
+    # e2e test's backend subprocess can connect without any extra wiring here.
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -80,12 +81,27 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+      ollama:
+        image: ollama/ollama:latest
+        env:
+          OLLAMA_HOST: "0.0.0.0"
+        ports:
+          - 11434:11434
+        options: >-
+          --health-cmd="ollama list || exit 1"
+          --health-interval=5s
+          --health-timeout=10s
+          --health-retries=30
+          --health-start-period=10s
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: daybidMCP/uv.lock
+      - name: Pull the embedding model
+        run: |
+          curl -sf http://localhost:11434/api/pull -d '{"name": "nomic-embed-text"}'
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run ty check
