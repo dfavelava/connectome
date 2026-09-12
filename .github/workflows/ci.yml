@@ -19,6 +19,24 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # embeddingsDao's tests exercise real pgvector behavior (see
+    # backend/daos/embeddingsDao_test.go); this service's defaults match what
+    # backend/managers/postgresManager.go falls back to when POSTGRES_* env
+    # vars aren't set, so those tests connect without extra wiring here.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fake-pass
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

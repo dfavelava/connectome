@@ -10,8 +10,10 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	pgxvec "github.com/pgvector/pgvector-go/pgx"
 
 	"daybid-dev-service/migrations"
 )
@@ -29,7 +31,17 @@ func NewPostgresManager() *PostgresManager {
 		log.Fatalf("postgres: migrations failed: %v", err)
 	}
 
-	pool, err := pgxpool.New(context.Background(), connString)
+	config, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		log.Fatalf("postgres: failed to parse connection string: %v", err)
+	}
+	// Teach pgx how to encode/decode the "vector" column type so callers can
+	// pass pgvector.Vector values straight through to Exec/Query.
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		return pgxvec.RegisterTypes(ctx, conn)
+	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		log.Fatalf("postgres: failed to create connection pool: %v", err)
 	}
