@@ -40,9 +40,11 @@ asked to "remember" something. Call `remember` whenever you learn a durable fact
 a stated preference, a correction to how you should behave, or a notable event —
 during any conversation, not only when told to. Prefer several small, well-typed
 memories (note/fact/preference/event) over one large dump. Before writing, consider
-calling `browse_all` or `get_memory` to check whether something similar already
-exists, to avoid duplicates. Call `browse_all` early in a conversation to recall
-relevant context before assuming you're starting fresh.""",
+calling `recall` or `get_memory` to check whether something similar already
+exists, to avoid duplicates. Call `recall` with a question or topic to find
+relevant memories ranked by relevance — prefer it over `browse_all` whenever you
+have something specific in mind; fall back to `browse_all` only when you need
+the full list of what's stored.""",
 )
 
 class Entity(BaseModel):
@@ -231,6 +233,35 @@ async def remember(
             "entity_keys": entity_keys,
         }
     )
+
+
+@mcp.tool()
+async def recall(
+    query: str = Field(description="A natural-language question or topic to search memory for, e.g. 'what does David think about tabs vs spaces'."),
+    k: int = Field(default=5, description="Maximum number of results to return."),
+    memory_type: MemoryType | None = Field(default=None, description="Restrict results to this memory type."),
+    entity: str | None = Field(default=None, description="Restrict results to memories mentioning this entity id."),
+    since: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or after this time."),
+    until: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or before this time."),
+    hydrate: bool = Field(default=False, description="Return each result's full memory body instead of a short snippet."),
+) -> str:
+    """Search memory by semantic similarity to query and return ranked results as JSON, each with a key, score, type, and either a snippet or (with hydrate=True) the full memory body."""
+    filters: dict[str, str] = {}
+    if memory_type is not None:
+        filters["type"] = memory_type
+    if entity is not None:
+        filters["entity"] = entity
+    if since is not None:
+        filters["since"] = since
+    if until is not None:
+        filters["until"] = until
+
+    body: dict[str, object] = {"query": query, "k": k, "hydrate": hydrate}
+    if filters:
+        body["filters"] = filters
+
+    response = await request("POST", "/memory/search", json_body=body)
+    return response.text
 
 
 @mcp.tool()
