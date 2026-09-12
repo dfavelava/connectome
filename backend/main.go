@@ -20,6 +20,7 @@ func main() {
 	postgresManager := managers.NewPostgresManager()
 	embeddingsDao := daos.NewEmbeddingsDao(postgresManager.Pool)
 	ollamaManager := managers.NewOllamaManager()
+	memoryManager := managers.NewMemoryManagerFromEnv()
 
 	r := gin.Default()
 	baseGroup := r.Group("/api")
@@ -33,7 +34,8 @@ func main() {
 	connectomeGroup := baseGroup.Group("/connectome")
 	llmGroup := baseGroup.Group("/llm")
 
-	resources.InitMemoryResource(connectomeGroup, ollamaManager, embeddingsDao)
+	resources.InitMemoryResource(connectomeGroup, memoryManager, ollamaManager, embeddingsDao)
+	resources.InitSearchResource(connectomeGroup, memoryManager, ollamaManager, embeddingsDao)
 	resources.InitLLMResource(llmGroup)
 
 	r.Run()

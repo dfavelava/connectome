@@ -7,7 +7,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
@@ -17,13 +16,6 @@ import (
 
 	"daybid-dev-service/daos"
 	"daybid-dev-service/managers"
-)
-
-type ManagerType string
-
-const (
-	ManagerTypeS3    ManagerType = "s3"
-	ManagerTypeLocal ManagerType = "local"
 )
 
 // memoryChunkWords and memoryChunkOverlapWords size the chunks that get
@@ -48,10 +40,9 @@ type EmbeddingsIndexer interface {
 }
 
 type MemoryResourceImpl struct {
-	manager     managers.MemoryManager
-	managerType ManagerType
-	embedder    Embedder
-	embeddings  EmbeddingsIndexer
+	manager    managers.MemoryManager
+	embedder   Embedder
+	embeddings EmbeddingsIndexer
 }
 
 type BatchReadError struct {
@@ -67,32 +58,16 @@ type DeleteMemoryRequest struct {
 	Key string `json:"key"`
 }
 
-func NewMemoryResource(r *gin.RouterGroup, embedder Embedder, embeddings EmbeddingsIndexer) *MemoryResourceImpl {
-	managerType := ManagerType(strings.ToLower(os.Getenv("MEMORY_MANAGER")))
-	if managerType == "" {
-		managerType = ManagerTypeS3
-	}
-
-	var manager managers.MemoryManager
-	switch managerType {
-	case ManagerTypeLocal:
-		manager = managers.InitLocalFsManager()
-	case ManagerTypeS3:
-		manager = managers.InitS3Manager()
-	default:
-		panic(fmt.Sprintf("unsupported MEMORY_MANAGER %q", managerType))
-	}
-
+func NewMemoryResource(manager managers.MemoryManager, embedder Embedder, embeddings EmbeddingsIndexer) *MemoryResourceImpl {
 	return &MemoryResourceImpl{
-		manager:     manager,
-		managerType: managerType,
-		embedder:    embedder,
-		embeddings:  embeddings,
+		manager:    manager,
+		embedder:   embedder,
+		embeddings: embeddings,
 	}
 }
 
-func InitMemoryResource(r *gin.RouterGroup, embedder Embedder, embeddings EmbeddingsIndexer) {
-	resource := NewMemoryResource(r, embedder, embeddings)
+func InitMemoryResource(r *gin.RouterGroup, manager managers.MemoryManager, embedder Embedder, embeddings EmbeddingsIndexer) {
+	resource := NewMemoryResource(manager, embedder, embeddings)
 
 	group := r.Group("/memory")
 	group.Use(middleware.AuthMiddleware())

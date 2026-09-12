@@ -139,6 +139,151 @@ func TestEmbeddingsDaoInsertNearestNeighborsAndDelete(t *testing.T) {
 	}
 }
 
+// blendVector returns a unit vector combining dims 0 and 1 so its cosine
+// distance to unitVector(dim, 0) is predictable and strictly between the
+// identical (distance 0) and orthogonal (distance 1) cases.
+func blendVector(dim int) []float32 {
+	v := make([]float32, dim)
+	v[0] = 0.8
+	v[1] = 0.6
+	return v
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
+	pool := testPool(t)
+	dao := NewEmbeddingsDao(pool)
+	ctx := context.Background()
+
+	suffix := uuid.NewString()
+	closeKey := "mem_close_" + suffix + ".md"
+	midKey := "mem_mid_" + suffix + ".md"
+	farKey := "mem_far_" + suffix + ".md"
+	t.Cleanup(func() {
+		for _, key := range []string{closeKey, midKey, farKey} {
+			_ = dao.DeleteEmbeddingsForKey(context.Background(), key)
+		}
+	})
+
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+
+	// closeKey's chunk 0 is an exact match for the query; its chunk 1 is
+	// orthogonal (far), so a correct collapse must surface chunk 0.
+	if err := dao.InsertEmbeddings(ctx, closeKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
+		{ChunkIndex: 1, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert closeKey: %v", err)
+	}
+	if err := dao.InsertEmbeddings(ctx, midKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: blendVector(768), Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"grace"}, CreatedAt: yesterday},
+	}); err != nil {
+		t.Fatalf("insert midKey: %v", err)
+	}
+	if err := dao.InsertEmbeddings(ctx, farKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert farKey: %v", err)
+	}
+
+	query := unitVector(768, 0)
+
+	t.Run("no filters ranks by distance and collapses to the best chunk", func(t *testing.T) {
+		hits, err := dao.Search(ctx, query, 10, SearchFilters{})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		byKey := make(map[string]SearchHit, len(hits))
+		var order []string
+		for _, h := range hits {
+			if h.MemoryKey == closeKey || h.MemoryKey == midKey || h.MemoryKey == farKey {
+				byKey[h.MemoryKey] = h
+				order = append(order, h.MemoryKey)
+			}
+		}
+		if len(order) != 3 {
+			t.Fatalf("expected 3 of our keys among hits, got %v", order)
+		}
+		if order[0] != closeKey || order[1] != midKey || order[2] != farKey {
+			t.Fatalf("expected order [close, mid, far], got %v", order)
+		}
+		if got := byKey[closeKey].ChunkIndex; got != 0 {
+			t.Fatalf("expected closeKey to collapse to its closer chunk 0, got chunk %d", got)
+		}
+	})
+
+	t.Run("type filter excludes other types", func(t *testing.T) {
+		hits, err := dao.Search(ctx, query, 10, SearchFilters{Type: strPtr("fact")})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		for _, h := range hits {
+			if h.MemoryKey == midKey {
+				t.Fatalf("expected midKey (type note) excluded by type=fact filter, got %+v", h)
+			}
+		}
+	})
+
+	t.Run("entity filter matches only memories with that entity", func(t *testing.T) {
+		hits, err := dao.Search(ctx, query, 10, SearchFilters{Entity: strPtr("grace")})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		var keys []string
+		for _, h := range hits {
+			if h.MemoryKey == closeKey || h.MemoryKey == midKey || h.MemoryKey == farKey {
+				keys = append(keys, h.MemoryKey)
+			}
+		}
+		if len(keys) != 1 || keys[0] != midKey {
+			t.Fatalf("expected only midKey for entity=grace, got %v", keys)
+		}
+	})
+
+	t.Run("since/until filter by created_at", func(t *testing.T) {
+		since := now.Add(-1 * time.Hour)
+		hits, err := dao.Search(ctx, query, 10, SearchFilters{Since: &since})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		for _, h := range hits {
+			if h.MemoryKey == midKey {
+				t.Fatalf("expected midKey (created yesterday) excluded by since filter, got %+v", h)
+			}
+		}
+
+		until := yesterday.Add(1 * time.Hour)
+		hits, err = dao.Search(ctx, query, 10, SearchFilters{Until: &until})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		var keys []string
+		for _, h := range hits {
+			if h.MemoryKey == closeKey || h.MemoryKey == midKey || h.MemoryKey == farKey {
+				keys = append(keys, h.MemoryKey)
+			}
+		}
+		if len(keys) != 1 || keys[0] != midKey {
+			t.Fatalf("expected only midKey for until=yesterday+1h, got %v", keys)
+		}
+	})
+
+	t.Run("k limits the number of results", func(t *testing.T) {
+		hits, err := dao.Search(ctx, query, 1, SearchFilters{Entity: strPtr("ada")})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		if len(hits) != 1 {
+			t.Fatalf("expected exactly 1 hit for k=1, got %d", len(hits))
+		}
+		if hits[0].MemoryKey != closeKey {
+			t.Fatalf("expected closeKey as the single closest hit, got %s", hits[0].MemoryKey)
+		}
+	})
+}
+
 func TestEmbeddingsDaoInsertEmbeddingsNoopOnEmptyRows(t *testing.T) {
 	pool := testPool(t)
 	dao := NewEmbeddingsDao(pool)

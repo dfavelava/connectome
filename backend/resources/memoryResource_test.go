@@ -81,7 +81,7 @@ func newTestServer(t *testing.T) (*httptest.Server, string, *fakeIndexer) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	indexer := newFakeIndexer()
-	InitMemoryResource(r.Group("/api/connectome"), fakeEmbedder{}, indexer)
+	InitMemoryResource(r.Group("/api/connectome"), managers.NewMemoryManagerFromEnv(), fakeEmbedder{}, indexer)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

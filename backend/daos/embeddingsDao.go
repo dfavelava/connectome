@@ -99,3 +99,61 @@ func (dao *EmbeddingsDao) NearestNeighbors(ctx context.Context, query []float32,
 	}
 	return neighbors, rows.Err()
 }
+
+// SearchFilters narrows a Search to a subset of embeddings. A nil field is
+// not applied.
+type SearchFilters struct {
+	Type   *string
+	Entity *string
+	Since  *time.Time
+	Until  *time.Time
+}
+
+// SearchHit is one memory's closest-matching chunk from a filtered nearest-
+// neighbour search, collapsed to at most one hit per memory key. Distance is
+// cosine distance (smaller is closer; 0 is identical).
+type SearchHit struct {
+	MemoryKey  string
+	ChunkIndex int
+	Type       string
+	Distance   float64
+}
+
+// Search returns up to k memory keys ranked by similarity to query, after
+// applying filters and collapsing each key down to its single
+// closest-matching chunk. Collapsing happens on the database side (DISTINCT
+// ON) rather than in Go so filtering and ranking stay consistent with what
+// the LIMIT actually returns.
+func (dao *EmbeddingsDao) Search(ctx context.Context, query []float32, k int, filters SearchFilters) ([]SearchHit, error) {
+	rows, err := dao.pool.Query(ctx,
+		`SELECT memory_key, chunk_index, type, distance
+		 FROM (
+			SELECT DISTINCT ON (memory_key)
+				memory_key, chunk_index, type,
+				embedding <=> $1 AS distance
+			FROM embeddings
+			WHERE ($2::text IS NULL OR type = $2)
+			  AND ($3::text IS NULL OR $3 = ANY(entity_ids))
+			  AND ($4::timestamptz IS NULL OR created_at >= $4)
+			  AND ($5::timestamptz IS NULL OR created_at <= $5)
+			ORDER BY memory_key, distance
+		 ) collapsed
+		 ORDER BY distance
+		 LIMIT $6`,
+		pgvector.NewVector(query), filters.Type, filters.Entity, filters.Since, filters.Until, k,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	defer rows.Close()
+
+	var hits []SearchHit
+	for rows.Next() {
+		var h SearchHit
+		if err := rows.Scan(&h.MemoryKey, &h.ChunkIndex, &h.Type, &h.Distance); err != nil {
+			return nil, fmt.Errorf("scan search hit: %w", err)
+		}
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
