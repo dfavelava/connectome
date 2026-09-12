@@ -1,10 +1,8 @@
 package resources
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/daos"
 	"daybid-dev-service/managers"
 )
 
@@ -26,32 +23,9 @@ const (
 	ManagerTypeLocal ManagerType = "local"
 )
 
-// memoryChunkWords and memoryChunkOverlapWords size the chunks that get
-// embedded per memory: ~512 tokens with a small overlap so a chunk boundary
-// doesn't sever context needed to make sense of either side of it.
-const (
-	memoryChunkWords        = 512
-	memoryChunkOverlapWords = 50
-)
-
-// Embedder produces a vector embedding for a chunk of text. Satisfied by
-// *managers.OllamaManager.
-type Embedder interface {
-	Embed(input string) ([]float32, error)
-}
-
-// EmbeddingsIndexer is the subset of *daos.EmbeddingsDao that memoryResource
-// needs to keep the embeddings table in sync with the memory blob store.
-type EmbeddingsIndexer interface {
-	InsertEmbeddings(ctx context.Context, memoryKey string, rows []daos.EmbeddingRow) error
-	DeleteEmbeddingsForKey(ctx context.Context, memoryKey string) error
-}
-
 type MemoryResourceImpl struct {
 	manager     managers.MemoryManager
 	managerType ManagerType
-	embedder    Embedder
-	embeddings  EmbeddingsIndexer
 }
 
 type BatchReadError struct {
@@ -67,7 +41,7 @@ type DeleteMemoryRequest struct {
 	Key string `json:"key"`
 }
 
-func NewMemoryResource(r *gin.RouterGroup, embedder Embedder, embeddings EmbeddingsIndexer) *MemoryResourceImpl {
+func NewMemoryResource(r *gin.RouterGroup) *MemoryResourceImpl {
 	managerType := ManagerType(strings.ToLower(os.Getenv("MEMORY_MANAGER")))
 	if managerType == "" {
 		managerType = ManagerTypeS3
@@ -86,13 +60,11 @@ func NewMemoryResource(r *gin.RouterGroup, embedder Embedder, embeddings Embeddi
 	return &MemoryResourceImpl{
 		manager:     manager,
 		managerType: managerType,
-		embedder:    embedder,
-		embeddings:  embeddings,
 	}
 }
 
-func InitMemoryResource(r *gin.RouterGroup, embedder Embedder, embeddings EmbeddingsIndexer) {
-	resource := NewMemoryResource(r, embedder, embeddings)
+func InitMemoryResource(r *gin.RouterGroup) {
+	resource := NewMemoryResource(r)
 
 	group := r.Group("/memory")
 	group.Use(middleware.AuthMiddleware())
@@ -180,43 +152,6 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 	c.JSON(200, gin.H{"contents": contents})
 }
 
-// indexMemory keeps the embeddings table in sync with one written memory
-// key: it parses the frontmatter written by daybidmcp's format_memory, chunks
-// the body, embeds each chunk, and supersedes any prior rows for the key.
-// Content with no valid memory frontmatter (e.g. an ent_*.json entity
-// record) is left unindexed.
-func (resource *MemoryResourceImpl) indexMemory(ctx context.Context, key, content string) error {
-	fm, body, ok := parseMemoryDocument(content)
-	if !ok {
-		return nil
-	}
-
-	chunks := chunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
-
-	rows := make([]daos.EmbeddingRow, len(chunks))
-	createdAt := fm.createdAtOrNow()
-	for i, chunk := range chunks {
-		embedding, err := resource.embedder.Embed(chunk)
-		if err != nil {
-			return fmt.Errorf("embed chunk %d of %s: %w", i, key, err)
-		}
-		rows[i] = daos.EmbeddingRow{
-			ChunkIndex: i,
-			Embedding:  embedding,
-			Model:      managers.EMBEDDING_MODEL,
-			Dim:        len(embedding),
-			Type:       fm.Type,
-			EntityIDs:  fm.Entities,
-			CreatedAt:  createdAt,
-		}
-	}
-
-	if err := resource.embeddings.DeleteEmbeddingsForKey(ctx, key); err != nil {
-		return fmt.Errorf("supersede embeddings for %s: %w", key, err)
-	}
-	return resource.embeddings.InsertEmbeddings(ctx, key, rows)
-}
-
 func (resource *MemoryResourceImpl) write(c *gin.Context) {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -231,22 +166,7 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 	}
 	defer file.Close()
 
-	content, err := io.ReadAll(file)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-
 	if err := resource.manager.PutObject(fileHeader.Filename, file); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := resource.indexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -282,23 +202,8 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 			}
 			defer file.Close()
 
-			content, err := io.ReadAll(file)
-			if err != nil {
-				errCh <- fmt.Errorf("read %s: %w", fileHeader.Filename, err)
-				return
-			}
-			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				errCh <- fmt.Errorf("seek %s: %w", fileHeader.Filename, err)
-				return
-			}
-
 			if err := resource.manager.PutObject(fileHeader.Filename, file); err != nil {
 				errCh <- fmt.Errorf("upload %s: %w", fileHeader.Filename, err)
-				return
-			}
-
-			if err := resource.indexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
-				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)
 	}
@@ -341,11 +246,6 @@ func (resource *MemoryResourceImpl) delete(c *gin.Context) {
 	key := body.Key
 
 	if err := resource.manager.DeleteObject(key); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-
-	if err := resource.embeddings.DeleteEmbeddingsForKey(c.Request.Context(), key); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

@@ -14,7 +14,6 @@ require (
 	github.com/ollama/ollama v0.33.3
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pgvector/pgvector-go/pgx v0.4.1
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -72,4 +71,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

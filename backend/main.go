@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 
-	"daybid-dev-service/daos"
 	"daybid-dev-service/managers"
 	"daybid-dev-service/resources"
 
@@ -17,9 +16,7 @@ func main() {
 		log.Printf("Warning: .env file not loaded: %v", err)
 	}
 
-	postgresManager := managers.NewPostgresManager()
-	embeddingsDao := daos.NewEmbeddingsDao(postgresManager.Pool)
-	ollamaManager := managers.NewOllamaManager()
+	managers.NewPostgresManager()
 
 	r := gin.Default()
 	baseGroup := r.Group("/api")
@@ -33,7 +30,7 @@ func main() {
 	connectomeGroup := baseGroup.Group("/connectome")
 	llmGroup := baseGroup.Group("/llm")
 
-	resources.InitMemoryResource(connectomeGroup, ollamaManager, embeddingsDao)
+	resources.InitMemoryResource(connectomeGroup)
 	resources.InitLLMResource(llmGroup)
 
 	r.Run()

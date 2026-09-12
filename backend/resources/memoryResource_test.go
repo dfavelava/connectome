@@ -2,7 +2,6 @@ package resources
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -11,61 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
 )
 
 const testToken = "e2e-test-token"
 
-// fakeEmbedder stands in for *managers.OllamaManager in tests: it returns a
-// deterministic, cheap embedding without needing a real Ollama server.
-type fakeEmbedder struct{}
-
-func (fakeEmbedder) Embed(input string) ([]float32, error) {
-	return []float32{float32(len(input))}, nil
-}
-
-// fakeIndexer stands in for *daos.EmbeddingsDao in tests: it records rows
-// in memory instead of talking to a real Postgres.
-type fakeIndexer struct {
-	mu   sync.Mutex
-	rows map[string][]daos.EmbeddingRow
-}
-
-func newFakeIndexer() *fakeIndexer {
-	return &fakeIndexer{rows: make(map[string][]daos.EmbeddingRow)}
-}
-
-func (f *fakeIndexer) InsertEmbeddings(_ context.Context, memoryKey string, rows []daos.EmbeddingRow) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.rows[memoryKey] = append(f.rows[memoryKey], rows...)
-	return nil
-}
-
-func (f *fakeIndexer) DeleteEmbeddingsForKey(_ context.Context, memoryKey string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.rows, memoryKey)
-	return nil
-}
-
-func (f *fakeIndexer) rowsFor(key string) []daos.EmbeddingRow {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]daos.EmbeddingRow{}, f.rows[key]...)
-}
-
 // newTestServer wires the memory routes onto a fresh gin engine backed by the
 // local filesystem manager rooted at a per-test temp directory, and returns an
-// httptest server, that directory's .connectome path, and the fake indexer
-// standing in for the embeddings table so tests can assert on it.
-func newTestServer(t *testing.T) (*httptest.Server, string, *fakeIndexer) {
+// httptest server plus that directory's .connectome path.
+func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 
 	home := t.TempDir()
@@ -80,13 +35,12 @@ func newTestServer(t *testing.T) (*httptest.Server, string, *fakeIndexer) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	indexer := newFakeIndexer()
-	InitMemoryResource(r.Group("/api/connectome"), fakeEmbedder{}, indexer)
+	InitMemoryResource(r.Group("/api/connectome"))
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return srv, connectomeDir, indexer
+	return srv, connectomeDir
 }
 
 type filePart struct {
@@ -150,7 +104,7 @@ func decodeJSON(t *testing.T, payload []byte) map[string]any {
 }
 
 func TestMemoryRoutesRequireBearerToken(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	cases := []struct {
 		name   string
@@ -185,7 +139,7 @@ func TestMemoryRoutesRequireBearerToken(t *testing.T) {
 }
 
 func TestMemoryWriteReadListDeleteRoundTrip(t *testing.T) {
-	srv, connectomeDir, _ := newTestServer(t)
+	srv, connectomeDir := newTestServer(t)
 	base := srv.URL + "/api/connectome/memory"
 
 	const key = "mem_roundtrip.md"
@@ -256,7 +210,7 @@ func TestMemoryWriteReadListDeleteRoundTrip(t *testing.T) {
 }
 
 func TestMemoryReadRejectsMissingKey(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	resp, _ := doRequest(t, http.MethodGet, srv.URL+"/api/connectome/memory/", nil, nil)
 	if resp.StatusCode == http.StatusOK {
@@ -265,7 +219,7 @@ func TestMemoryReadRejectsMissingKey(t *testing.T) {
 }
 
 func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
-	srv, connectomeDir, indexer := newTestServer(t)
+	srv, connectomeDir := newTestServer(t)
 	base := srv.URL + "/api/connectome/memory"
 
 	parts := []filePart{
@@ -286,11 +240,6 @@ func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
 		}
 		if string(onDisk) != p.content {
 			t.Fatalf("batch write: %s mismatch: got %q", p.name, string(onDisk))
-		}
-		// Neither file carries valid memory frontmatter (mem_a.md is a plain
-		// string, ent_ada.json is an entity record), so neither is indexed.
-		if rows := indexer.rowsFor(p.name); len(rows) != 0 {
-			t.Fatalf("batch write: expected %s to be left unindexed, got %d rows", p.name, len(rows))
 		}
 	}
 
@@ -324,89 +273,10 @@ func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
 }
 
 func TestMemoryBatchReadRejectsEmptyKeys(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/batch/read", strings.NewReader(`{"keys":[]}`), map[string]string{"Content-Type": "application/json"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d (%s)", resp.StatusCode, payload)
-	}
-}
-
-// memoryDocument builds a minimal connectome memory document with the
-// frontmatter shape daybidmcp's format_memory writes.
-func memoryDocument(memType, body string, entities []string) string {
-	entitiesYAML := "[]"
-	if len(entities) > 0 {
-		var quoted []string
-		for _, e := range entities {
-			quoted = append(quoted, `"`+e+`"`)
-		}
-		entitiesYAML = "[" + strings.Join(quoted, ", ") + "]"
-	}
-	return "---\n" +
-		"type: " + memType + "\n" +
-		"created_at: \"2024-01-01T00:00:00Z\"\n" +
-		"entities: " + entitiesYAML + "\n" +
-		"---\n" + body + "\n"
-}
-
-func TestMemoryWriteIndexesRewriteSupersedesDeleteRemoves(t *testing.T) {
-	srv, _, indexer := newTestServer(t)
-	base := srv.URL + "/api/connectome/memory"
-
-	const key = "mem_indexed.md"
-	longBody := strings.Repeat("word ", 600) // > memoryChunkWords, so it splits into multiple chunks
-
-	// write: a long memory produces multiple chunk rows, each carrying type/entities.
-	body, contentType := multipartBody(t, []filePart{{name: key, content: memoryDocument("fact", longBody, []string{"ada"})}})
-	resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
-	}
-
-	rows := indexer.rowsFor(key)
-	if len(rows) < 2 {
-		t.Fatalf("expected multiple chunk rows for a long memory, got %d", len(rows))
-	}
-	for i, row := range rows {
-		if row.ChunkIndex != i {
-			t.Fatalf("expected chunk index %d, got %d", i, row.ChunkIndex)
-		}
-		if row.Type != "fact" {
-			t.Fatalf("expected type fact, got %q", row.Type)
-		}
-		if len(row.EntityIDs) != 1 || row.EntityIDs[0] != "ada" {
-			t.Fatalf("expected entity [ada], got %v", row.EntityIDs)
-		}
-		if row.Model != managers.EMBEDDING_MODEL {
-			t.Fatalf("expected model %s, got %s", managers.EMBEDDING_MODEL, row.Model)
-		}
-		if row.Dim == 0 || len(row.Embedding) != row.Dim {
-			t.Fatalf("expected a non-empty embedding matching dim, got %v (dim %d)", row.Embedding, row.Dim)
-		}
-	}
-
-	// rewrite: a short memory at the same key supersedes the old rows entirely.
-	shortBody, contentType := multipartBody(t, []filePart{{name: key, content: memoryDocument("note", "short body", nil)}})
-	resp, payload = doRequest(t, http.MethodPost, base+"/", shortBody, map[string]string{"Content-Type": contentType})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("rewrite: expected 200, got %d (%s)", resp.StatusCode, payload)
-	}
-
-	rows = indexer.rowsFor(key)
-	if len(rows) != 1 {
-		t.Fatalf("expected rewrite to supersede down to 1 row, got %d", len(rows))
-	}
-	if rows[0].Type != "note" {
-		t.Fatalf("expected rewritten type note, got %q", rows[0].Type)
-	}
-
-	// delete: removes the memory's rows entirely.
-	resp, payload = doRequest(t, http.MethodDelete, base+"/", strings.NewReader(`{"key":"`+key+`"}`), map[string]string{"Content-Type": "application/json"})
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete: expected 204, got %d (%s)", resp.StatusCode, payload)
-	}
-	if rows := indexer.rowsFor(key); len(rows) != 0 {
-		t.Fatalf("expected delete to remove rows, got %d", len(rows))
 	}
 }
