@@ -443,7 +443,14 @@ async def _supersede_relationship(backend: Backend) -> None:
 
 
 async def _recall_as_acl_scope(backend: Backend) -> None:
-    from daybidmcp.server import Entity, Relationship, forget, get_memory, recall, remember
+    from daybidmcp.server import (
+        Entity,
+        Relationship,
+        forget,
+        get_memory,
+        recall,
+        remember,
+    )
 
     alice = Entity(id="alice", name="Alice")
 
