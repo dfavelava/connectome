@@ -145,17 +145,17 @@ func (resource *SearchResourceImpl) snippetResults(hits []daos.SearchHit) []Sear
 // snippetForChunk re-derives the chunk at chunkIndex from a memory's current
 // content instead of storing chunk text in the embeddings table, keeping the
 // blob store the single source of truth for memory bodies (see
-// backend/resources/memoryDocument.go's chunkWords, used at index time). If
+// backend/resources/memoryDocument.go's ChunkWords, used at index time). If
 // the memory has been rewritten since it was indexed, chunkIndex may no
 // longer line up exactly; out-of-range indexes fall back to the first chunk
 // rather than failing the whole result.
 func snippetForChunk(content string, chunkIndex int) string {
-	_, body, ok := parseMemoryDocument(content)
+	_, body, ok := ParseMemoryDocument(content)
 	if !ok {
 		body = content
 	}
 
-	chunks := chunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
+	chunks := ChunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
 	if len(chunks) == 0 {
 		return ""
 	}

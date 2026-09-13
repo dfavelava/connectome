@@ -155,18 +155,19 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 	c.JSON(200, gin.H{"contents": contents})
 }
 
-// indexMemory keeps the embeddings table in sync with one written memory
+// IndexMemory keeps the embeddings table in sync with one written memory
 // key: it parses the frontmatter written by daybidmcp's format_memory, chunks
 // the body, embeds each chunk, and supersedes any prior rows for the key.
 // Content with no valid memory frontmatter (e.g. an ent_*.json entity
-// record) is left unindexed.
-func (resource *MemoryResourceImpl) indexMemory(ctx context.Context, key, content string) error {
-	fm, body, ok := parseMemoryDocument(content)
+// record) is left unindexed. It is also the entry point cmd/reindex uses to
+// rebuild the embeddings table from the blob store.
+func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, content string) error {
+	fm, body, ok := ParseMemoryDocument(content)
 	if !ok {
 		return nil
 	}
 
-	chunks := chunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
+	chunks := ChunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
 
 	rows := make([]daos.EmbeddingRow, len(chunks))
 	createdAt := fm.createdAtOrNow()
@@ -221,7 +222,7 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 		return
 	}
 
-	if err := resource.indexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
+	if err := resource.IndexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -272,7 +273,7 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 				return
 			}
 
-			if err := resource.indexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
+			if err := resource.IndexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
 				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)

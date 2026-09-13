@@ -284,6 +284,44 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 }
 
+func TestEmbeddingsDaoTruncateEmbeddingsRemovesAllRows(t *testing.T) {
+	pool := testPool(t)
+	dao := NewEmbeddingsDao(pool)
+	ctx := context.Background()
+
+	keyA := "mem_truncate_a_" + uuid.NewString() + ".md"
+	keyB := "mem_truncate_b_" + uuid.NewString() + ".md"
+	t.Cleanup(func() {
+		_ = dao.DeleteEmbeddingsForKey(context.Background(), keyA)
+		_ = dao.DeleteEmbeddingsForKey(context.Background(), keyB)
+	})
+
+	if err := dao.InsertEmbeddings(ctx, keyA, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
+	}); err != nil {
+		t.Fatalf("insert keyA: %v", err)
+	}
+	if err := dao.InsertEmbeddings(ctx, keyB, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
+	}); err != nil {
+		t.Fatalf("insert keyB: %v", err)
+	}
+
+	if err := dao.TruncateEmbeddings(ctx); err != nil {
+		t.Fatalf("truncate embeddings: %v", err)
+	}
+
+	neighbors, err := dao.NearestNeighbors(ctx, unitVector(768, 0), 50)
+	if err != nil {
+		t.Fatalf("nearest neighbors after truncate: %v", err)
+	}
+	for _, n := range neighbors {
+		if n.MemoryKey == keyA || n.MemoryKey == keyB {
+			t.Fatalf("expected no rows to survive truncate, found %+v", n)
+		}
+	}
+}
+
 func TestEmbeddingsDaoInsertEmbeddingsNoopOnEmptyRows(t *testing.T) {
 	pool := testPool(t)
 	dao := NewEmbeddingsDao(pool)

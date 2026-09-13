@@ -110,6 +110,34 @@ go test ./...
 
 The backend loads `.env` from the current working directory when available.
 
+### Rebuilding the search index
+
+The `embeddings` table is derived, disposable state: everything it holds can
+be reconstructed from the memory blob store (`mem_*.md` files) alone. To
+rebuild it from scratch — for example, after dropping the table, or to
+recover from a bad embedding run — with `docker compose up` already running:
+
+```bash
+cd backend
+POSTGRES_HOST=localhost go run ./cmd/reindex
+```
+
+`backend/.env` sets `POSTGRES_HOST=postgres`, the compose service name, which
+only resolves on the container network; the `postgres` service publishes
+5432 to the host precisely so a host-run tool like this can override it to
+`localhost` instead. (Running the whole backend the same way, `go run .`,
+needs the same override.)
+
+This truncates `embeddings` and re-chunks and re-embeds every memory in the
+blob store, so it's safe to run against a table that already has rows in it.
+Pass `-dry-run` to see how many memories would be indexed without touching
+the table or calling the embedder:
+
+```bash
+cd backend
+POSTGRES_HOST=localhost go run ./cmd/reindex -dry-run
+```
+
 ## MCP server
 
 The MCP server exposes Daybid memory operations over stdio. Configure `daybidMCP/.env`:
