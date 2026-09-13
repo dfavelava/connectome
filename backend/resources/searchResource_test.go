@@ -26,7 +26,7 @@ type fakeSearchIndex struct {
 	gotFilters daos.SearchFilters
 }
 
-func (f *fakeSearchIndex) Search(_ context.Context, _ []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error) {
+func (f *fakeSearchIndex) Search(_ context.Context, _ string, _ []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error) {
 	f.gotK = k
 	f.gotFilters = filters
 	return f.hits, nil
@@ -111,7 +111,7 @@ func TestSearchReturnsRankedSnippets(t *testing.T) {
 	content := memoryDocument("preference", strings.Join(words, " "), []string{"david"})
 
 	srv, index := newSearchTestServer(t, []daos.SearchHit{
-		{MemoryKey: key, ChunkIndex: 1, Type: "preference", Distance: 0.2},
+		{MemoryKey: key, ChunkIndex: 1, Type: "preference", Score: 0.8},
 	}, map[string]string{key: content})
 
 	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
@@ -148,7 +148,7 @@ func TestSearchReturnsRankedSnippets(t *testing.T) {
 		t.Fatalf("expected type preference, got %s", result.Type)
 	}
 	if result.Score != 0.8 {
-		t.Fatalf("expected score 1-distance = 0.8, got %v", result.Score)
+		t.Fatalf("expected score to pass through the hit's blended score 0.8, got %v", result.Score)
 	}
 	if result.Content != "" {
 		t.Fatalf("expected no content without hydrate, got %q", result.Content)
@@ -166,7 +166,7 @@ func TestSearchHydrateReturnsFullContent(t *testing.T) {
 	content := memoryDocument("note", "short body here", nil)
 
 	srv, _ := newSearchTestServer(t, []daos.SearchHit{
-		{MemoryKey: key, ChunkIndex: 0, Type: "note", Distance: 0.1},
+		{MemoryKey: key, ChunkIndex: 0, Type: "note", Score: 0.9},
 	}, map[string]string{key: content})
 
 	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
