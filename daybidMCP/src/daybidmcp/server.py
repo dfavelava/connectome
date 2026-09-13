@@ -31,6 +31,14 @@ DEFAULT_MEMORY_TYPE: MemoryType = "note"
 # originates from an MCP client.
 MEMORY_SOURCE_TYPE = "mcp"
 
+# The truth-status of a relationship claim. Lives on the relationship entry,
+# not the memory, so one memory can carry a fact and a rumor side by side.
+#   fact       - a settled, current claim
+#   hypothesis - a working guess, not yet confirmed
+#   rumor      - reported but unverified, may turn out to be false
+RelationshipKind = Literal["fact", "hypothesis", "rumor"]
+DEFAULT_RELATIONSHIP_KIND: RelationshipKind = "fact"
+
 _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 mcp = MCPServer(
@@ -57,11 +65,18 @@ class EntityWithMemories(Entity):
     memory_ids: list[str] | None = None
 
 class Relationship(BaseModel):
-    """A directed relationship between entities extracted from the memory."""
+    """A directed relationship between entities extracted from the memory.
+
+    For a symmetric predicate (e.g. `adjacent_to`), write a single relationship
+    entry at creation time rather than one in each direction - querying such
+    predicates as an undirected graph edge is Phase 2's job, not this one's.
+    """
 
     subjectEntityId: str = Field(description="The entity ID that acts as the subject or source of the relationship.")
     predicate: str = Field(description="The relationship label, action, or edge type connecting the subject to the object, such as 'works_with' or 'likes'.")
     objectEntityId: str | None = Field(default=None, description="The entity ID that acts as the object or target of the relationship. Leave null when the relationship has no explicit target entity.")
+    kind: RelationshipKind = Field(default=DEFAULT_RELATIONSHIP_KIND, description="The truth-status of this claim: 'fact' for a settled claim, 'hypothesis' for an unconfirmed working guess, or 'rumor' for a reported but unverified claim.")
+    superseded_by: str | None = Field(default=None, description="The id of the memory that supersedes/corrects this relationship claim, if any. Null means this relationship is current/active.")
 
 class MemorySource(BaseModel):
     type: str
@@ -265,6 +280,29 @@ async def remember(
             "entity_keys": entity_keys,
         }
     )
+
+
+@mcp.tool()
+async def supersede_relationship(
+    memory_id: str = Field(description="The memory key (e.g. 'mem_abc.md') whose relationship entry should be patched."),
+    subjectEntityId: str = Field(description="The subjectEntityId of the relationship to patch."),
+    predicate: str = Field(description="The predicate of the relationship to patch."),
+    objectEntityId: str | None = Field(default=None, description="The objectEntityId of the relationship to patch. Must match exactly, including null for a relationship with no object."),
+    superseded_by: str | None = Field(default=None, description="The id of the memory that supersedes/corrects this relationship claim. Pass null to clear a prior supersession and mark the relationship current again."),
+) -> str:
+    """Set (or clear) superseded_by on one relationship entry of an existing memory, in place, without touching its content or triggering re-embedding, and return the backend JSON response."""
+    response = await request(
+        "PATCH",
+        "/memory/relationship",
+        json_body={
+            "key": memory_id,
+            "subjectEntityId": subjectEntityId,
+            "predicate": predicate,
+            "objectEntityId": objectEntityId,
+            "superseded_by": superseded_by,
+        },
+    )
+    return response.text
 
 
 @mcp.tool()

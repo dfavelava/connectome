@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -58,6 +59,32 @@ type DeleteMemoryRequest struct {
 	Key string `json:"key"`
 }
 
+// SupersedeRelationshipRequest identifies one relationship entry on an
+// existing memory (by subject/predicate/object) and the superseded_by value
+// to set on it. ObjectEntityID and SupersededBy are pointers so a JSON null
+// or an omitted key both decode to nil - "no object" and "clear the prior
+// supersession" respectively.
+type SupersedeRelationshipRequest struct {
+	Key             string  `json:"key"`
+	SubjectEntityID string  `json:"subjectEntityId"`
+	Predicate       string  `json:"predicate"`
+	ObjectEntityID  *string `json:"objectEntityId"`
+	SupersededBy    *string `json:"superseded_by"`
+}
+
+// memoryFileReader adapts an in-memory byte slice to multipart.File so a
+// patched document can be written back through the same
+// MemoryManager.PutObject used by uploads, without a temp file.
+type memoryFileReader struct {
+	*bytes.Reader
+}
+
+func (memoryFileReader) Close() error { return nil }
+
+func newMemoryFile(content []byte) multipart.File {
+	return memoryFileReader{bytes.NewReader(content)}
+}
+
 func NewMemoryResource(manager managers.MemoryManager, embedder Embedder, embeddings EmbeddingsIndexer) *MemoryResourceImpl {
 	return &MemoryResourceImpl{
 		manager:    manager,
@@ -77,6 +104,7 @@ func InitMemoryResource(r *gin.RouterGroup, manager managers.MemoryManager, embe
 	group.GET("/", resource.read)
 	group.DELETE("/", resource.delete)
 	group.GET("/list", resource.list)
+	group.PATCH("/relationship", resource.supersedeRelationship)
 }
 
 func (resource *MemoryResourceImpl) read(c *gin.Context) {
@@ -309,6 +337,50 @@ func (resource *MemoryResourceImpl) list(c *gin.Context) {
 	}
 
 	c.JSON(200, res)
+}
+
+// supersedeRelationship patches superseded_by on one relationship entry of an
+// existing memory's frontmatter and writes the result straight back to the
+// blob store. It deliberately skips IndexMemory: superseded_by is metadata
+// that lives in the frontmatter, not the embedded content, so there is
+// nothing here for the embedder to re-run.
+func (resource *MemoryResourceImpl) supersedeRelationship(c *gin.Context) {
+	var req SupersedeRelationshipRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Key == "" || req.SubjectEntityID == "" || req.Predicate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key, subjectEntityId, and predicate are required"})
+		return
+	}
+
+	content, err := resource.manager.GetObject(req.Key)
+	if err != nil {
+		if errors.Is(err, managers.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", req.Key)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	patched, err := PatchRelationshipSupersededBy(content, req.SubjectEntityID, req.Predicate, req.ObjectEntityID, req.SupersededBy)
+	if err != nil {
+		if errors.Is(err, ErrRelationshipNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no matching relationship found on this memory"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := resource.manager.PutObject(req.Key, newMemoryFile([]byte(patched))); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "success", "key": req.Key})
 }
 
 func (resource *MemoryResourceImpl) delete(c *gin.Context) {

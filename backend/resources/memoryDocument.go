@@ -28,31 +28,45 @@ type memoryFrontmatter struct {
 	ACL *[]string `yaml:"acl"`
 }
 
-// ParseMemoryDocument splits a memory file's raw content into its frontmatter
-// and body. ok is false for content with no valid, indexable frontmatter -
-// notably the plain-JSON entity records stored under the same key namespace,
-// which have no frontmatter at all.
-func ParseMemoryDocument(content string) (frontmatter memoryFrontmatter, body string, ok bool) {
+// splitFrontmatter splits a memory file's raw content into its raw YAML
+// frontmatter block and body text. ok is false for content with no
+// "---"-delimited frontmatter at all - notably the plain-JSON entity records
+// stored under the same key namespace.
+func splitFrontmatter(content string) (frontmatterYAML, body string, ok bool) {
 	const delim = "---"
 	if !strings.HasPrefix(content, delim+"\n") {
-		return memoryFrontmatter{}, "", false
+		return "", "", false
 	}
 
 	rest := content[len(delim)+1:]
 	end := strings.Index(rest, "\n"+delim)
 	if end == -1 {
+		return "", "", false
+	}
+
+	frontmatterYAML = rest[:end]
+	body = strings.TrimPrefix(rest[end+len(delim)+1:], "\n")
+	return frontmatterYAML, body, true
+}
+
+// ParseMemoryDocument splits a memory file's raw content into its frontmatter
+// and body. ok is false for content with no valid, indexable frontmatter -
+// notably the plain-JSON entity records stored under the same key namespace,
+// which have no frontmatter at all.
+func ParseMemoryDocument(content string) (frontmatter memoryFrontmatter, body string, ok bool) {
+	raw, body, ok := splitFrontmatter(content)
+	if !ok {
 		return memoryFrontmatter{}, "", false
 	}
 
 	var fm memoryFrontmatter
-	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+	if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
 		return memoryFrontmatter{}, "", false
 	}
 	if !validMemoryTypes[fm.Type] {
 		return memoryFrontmatter{}, "", false
 	}
 
-	body = strings.TrimPrefix(rest[end+len(delim)+1:], "\n")
 	return fm, body, true
 }
 
