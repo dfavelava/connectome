@@ -151,6 +151,10 @@ def test_recall_as_scopes_results_by_acl_and_member_of(backend: Backend) -> None
     asyncio.run(_recall_as_acl_scope(backend))
 
 
+def test_facet_recalls_correctly_for_its_own_audience_alongside_root(backend: Backend) -> None:
+    asyncio.run(_facet_recall(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -164,66 +168,78 @@ async def _roundtrip(backend: Backend) -> None:
             relationships=[],
             memory_type="fact",
             acl=None,
+            derived_from=None,
         )
     )
     memory_key = first["key"]
-    assert memory_key.startswith("mem_") and memory_key.endswith(".md")
-    assert first["entity_keys"] == ["ent_ada.json"]
+    second_key: str | None = None
+    try:
+        assert memory_key.startswith("mem_") and memory_key.endswith(".md")
+        assert first["entity_keys"] == ["ent_ada.json"]
 
-    memory_path = backend.connectome_dir / memory_key
-    assert memory_path.is_file(), "memory file was not written to the local FS"
+        memory_path = backend.connectome_dir / memory_key
+        assert memory_path.is_file(), "memory file was not written to the local FS"
 
-    metadata, body = _parse_frontmatter(memory_path.read_text())
-    assert metadata["version"] == "connectome/memory/0.1"
-    assert metadata["id"] == memory_key
-    assert metadata["type"] == "fact"
-    assert metadata["entities"] == ["ada"]
-    assert metadata["relationships"] == []
-    assert metadata["created_at"]
-    assert "source" in metadata
-    assert body == "Ada enjoys analytical engines."
+        metadata, body = _parse_frontmatter(memory_path.read_text())
+        assert metadata["version"] == "connectome/memory/0.1"
+        assert metadata["id"] == memory_key
+        assert metadata["type"] == "fact"
+        assert metadata["entities"] == ["ada"]
+        assert metadata["relationships"] == []
+        assert metadata["created_at"]
+        assert "source" in metadata
+        assert body == "Ada enjoys analytical engines."
 
-    entity_path = backend.connectome_dir / "ent_ada.json"
-    assert entity_path.is_file(), "entity record was not created"
-    entity_record = json.loads(entity_path.read_text())
-    assert entity_record["id"] == "ada"
-    assert entity_record["name"] == "Ada Lovelace"
-    assert entity_record["memory_ids"] == [memory_key]
+        entity_path = backend.connectome_dir / "ent_ada.json"
+        assert entity_path.is_file(), "entity record was not created"
+        entity_record = json.loads(entity_path.read_text())
+        assert entity_record["id"] == "ada"
+        assert entity_record["name"] == "Ada Lovelace"
+        assert entity_record["memory_ids"] == [memory_key]
 
-    # --- remember again: memory_ids merge on the shared entity -------------
-    second = json.loads(
-        await remember(
-            content="Ada wrote the first algorithm.",
-            entities=[ada],
-            relationships=[],
-            memory_type="fact",
-            acl=None,
+        # --- remember again: memory_ids merge on the shared entity ---------
+        second = json.loads(
+            await remember(
+                content="Ada wrote the first algorithm.",
+                entities=[ada],
+                relationships=[],
+                memory_type="fact",
+                acl=None,
+                derived_from=None,
+            )
         )
-    )
-    second_key = second["key"]
-    assert second_key != memory_key
+        second_key = second["key"]
+        assert second_key != memory_key
 
-    entity_record = json.loads(entity_path.read_text())
-    assert entity_record["memory_ids"] == [memory_key, second_key]
+        entity_record = json.loads(entity_path.read_text())
+        assert entity_record["memory_ids"] == [memory_key, second_key]
 
-    # --- browse_all -------------------------------------------------------
-    listed = json.loads(await browse_all())
-    listed_keys = {item["key"] for item in listed["keys"]}
-    assert {memory_key, second_key, "ent_ada.json"} <= listed_keys
+        # --- browse_all -----------------------------------------------------
+        listed = json.loads(await browse_all())
+        listed_keys = {item["key"] for item in listed["keys"]}
+        assert {memory_key, second_key, "ent_ada.json"} <= listed_keys
 
-    # --- get_memory ------------------------------------------------------
-    fetched = json.loads(await get_memory(memory_key))
-    assert "Ada enjoys analytical engines." in fetched["content"]
+        # --- get_memory ------------------------------------------------------
+        fetched = json.loads(await get_memory(memory_key))
+        assert "Ada enjoys analytical engines." in fetched["content"]
 
-    # --- forget --------------------------------------------------------
-    deleted = json.loads(await forget(memory_key))
-    assert deleted == {"message": "deleted", "key": memory_key}
-    assert not memory_path.exists(), "memory file still present after forget"
+        # --- forget -----------------------------------------------------------
+        deleted = json.loads(await forget(memory_key))
+        assert deleted == {"message": "deleted", "key": memory_key}
+        assert not memory_path.exists(), "memory file still present after forget"
 
-    remaining = {item["key"] for item in json.loads(await browse_all())["keys"]}
-    assert memory_key not in remaining
-    assert second_key in remaining
-    assert "ent_ada.json" in remaining
+        remaining = {item["key"] for item in json.loads(await browse_all())["keys"]}
+        assert memory_key not in remaining
+        assert second_key in remaining
+        assert "ent_ada.json" in remaining
+    finally:
+        # memory_key is already forgotten above; second_key and the entity
+        # record are only forgotten here so a real (non-ephemeral) Postgres
+        # instance backing the embeddings table isn't left with an orphaned
+        # row when this test runs against it.
+        if second_key is not None:
+            await forget(second_key)
+        await forget("ent_ada.json")
 
 
 async def _recall_roundtrip(backend: Backend) -> None:
@@ -239,6 +255,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             relationships=[],
             memory_type="preference",
             acl=None,
+            derived_from=None,
         )
     )
     ada_fact = json.loads(
@@ -248,6 +265,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             relationships=[],
             memory_type="fact",
             acl=None,
+            derived_from=None,
         )
     )
     grace_fact = json.loads(
@@ -257,6 +275,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             relationships=[],
             memory_type="fact",
             acl=None,
+            derived_from=None,
         )
     )
     tea_key, ada_key, grace_key = tea["key"], ada_fact["key"], grace_fact["key"]
@@ -324,6 +343,7 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
             ],
             memory_type="fact",
             acl=["GM"],
+            derived_from=None,
         )
     )
     memory_key = result["key"]
@@ -376,6 +396,7 @@ async def _supersede_relationship(backend: Backend) -> None:
             ],
             memory_type="fact",
             acl=None,
+            derived_from=None,
         )
     )
     memory_key = result["key"]
@@ -461,6 +482,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             relationships=[Relationship(subjectEntityId="alice", predicate="member_of", objectEntityId="Party A")],
             memory_type="fact",
             acl=None,
+            derived_from=None,
         )
     )
     membership_key = membership["key"]
@@ -472,6 +494,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             relationships=[],
             memory_type="note",
             acl=None,
+            derived_from=None,
         )
     )
     party_memory = json.loads(
@@ -481,6 +504,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             relationships=[],
             memory_type="note",
             acl=["Party A"],
+            derived_from=None,
         )
     )
     gm_memory = json.loads(
@@ -490,6 +514,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             relationships=[],
             memory_type="note",
             acl=["GM"],
+            derived_from=None,
         )
     )
     open_key, party_key, gm_key = open_memory["key"], party_memory["key"], gm_memory["key"]
@@ -542,3 +567,84 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
         for key in (membership_key, open_key, party_key, gm_key):
             await forget(key)
         await forget("ent_alice.json")
+
+
+async def _facet_recall(backend: Backend) -> None:
+    from daybidmcp.server import forget, get_memory, recall, remember
+
+    root = json.loads(
+        await remember(
+            content="The party found a strange amulet in the ruins north of Ashvale.",
+            entities=[],
+            relationships=[],
+            memory_type="event",
+            acl=None,
+            derived_from=None,
+        )
+    )
+    root_key = root["key"]
+
+    facet = json.loads(
+        await remember(
+            content="Grace secretly suspects the amulet is cursed and means to hide it from the rest of the party.",
+            entities=[],
+            relationships=[],
+            memory_type="event",
+            acl=["GM"],
+            derived_from=root_key,
+        )
+    )
+    facet_key = facet["key"]
+
+    try:
+        # --- derived_from round-trips through the stored frontmatter -----------
+        fetched_facet = json.loads(await get_memory(facet_key))
+        facet_metadata, _ = _parse_frontmatter(fetched_facet["content"])
+        assert facet_metadata["derived_from"] == root_key
+
+        fetched_root = json.loads(await get_memory(root_key))
+        root_metadata, _ = _parse_frontmatter(fetched_root["content"])
+        assert root_metadata["derived_from"] is None
+
+        # --- a facet is chunked, embedded, and ACL-filtered like any other ------
+        # --- memory: the GM audience recalls both the root and its facet -------
+        gm_keys = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="what happened with the amulet in the ruins",
+                    k=10,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_="GM",
+                )
+            )["results"]
+        }
+        assert root_key in gm_keys
+        assert facet_key in gm_keys
+
+        # --- an audience outside the facet's acl sees the root but not the -----
+        # --- facet, which is narrower ---------------------------------------
+        party_keys = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="what happened with the amulet in the ruins",
+                    k=10,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_="alice",
+                )
+            )["results"]
+        }
+        assert root_key in party_keys
+        assert facet_key not in party_keys
+    finally:
+        await forget(root_key)
+        await forget(facet_key)

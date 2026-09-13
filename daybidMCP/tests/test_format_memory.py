@@ -115,6 +115,26 @@ def test_format_memory_preserves_explicit_empty_acl():
     assert payload["metadata"]["acl"] == []
 
 
+def test_format_memory_defaults_derived_from_to_none():
+    document, payload = format_memory("mem_root.md", "body", [], [], CREATED_AT)
+
+    post = frontmatter.loads(document)
+
+    assert post["derived_from"] is None
+    assert payload["metadata"]["derived_from"] is None
+
+
+def test_format_memory_writes_derived_from():
+    document, payload = format_memory(
+        "mem_facet.md", "body", [], [], CREATED_AT, derived_from="mem_root.md"
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["derived_from"] == "mem_root.md"
+    assert payload["metadata"]["derived_from"] == "mem_root.md"
+
+
 def test_relationship_defaults_kind_to_fact_and_superseded_by_to_none():
     relationship = Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea")
 

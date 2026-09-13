@@ -100,6 +100,7 @@ class MemoryMetadata(BaseModel):
     entities: list[str] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
     acl: list[str] | None = None
+    derived_from: str | None = None
 
 class Memory(BaseModel):
     id: str
@@ -136,6 +137,7 @@ def format_memory(
     created_at: str,
     memory_type: str = DEFAULT_MEMORY_TYPE,
     acl: list[str] | None = None,
+    derived_from: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     metadata = MemoryMetadata(
         id=id,
@@ -145,6 +147,7 @@ def format_memory(
         entities=[entity.id for entity in entities],
         relationships=relationships,
         acl=acl,
+        derived_from=derived_from,
     )
     metadata_payload = metadata.model_dump(mode="json")
     if acl is None:
@@ -258,6 +261,7 @@ async def remember(
     relationships: list[Relationship] | None = Field(default=None, description="Directed relationships between the provided entities. Use this to capture how entities are connected within the memory."),
     memory_type: MemoryType = Field(default=DEFAULT_MEMORY_TYPE, description="The kind of memory: 'note' for a freeform observation, 'fact' for a durable statement of fact, 'preference' for how the user wants things done, or 'event' for something that happened at a point in time."),
     acl: list[str] | None = Field(default=None, description="Access-control list (entity/group ids) restricting who can access this memory. Omit to apply this Connectome instance's configured default ACL policy (unrestricted if the instance has none configured)."),
+    derived_from: str | None = Field(default=None, description="The id of another memory (e.g. 'mem_abc.md') this one is a facet of. A facet is an ordinary memory - stored, chunked, embedded, and ACL-filtered exactly like any other - that happens to record one entity's own version of the root memory's content. Use derived_from when the facet's *content* diverges from the root (a character's private take on a shared event, a rumor vs. the settled fact); if the audience is merely narrower but the content agrees with the root, just tighten the root memory's own acl instead of creating a facet."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -275,6 +279,7 @@ async def remember(
         now.isoformat(),
         memory_type,
         acl,
+        derived_from,
     )
 
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]
