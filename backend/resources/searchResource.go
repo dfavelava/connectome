@@ -44,6 +44,11 @@ type SearchRequest struct {
 	K       int                   `json:"k,omitempty"`
 	Filters *SearchFiltersRequest `json:"filters,omitempty"`
 	Hydrate bool                  `json:"hydrate,omitempty"`
+	// As is an entity id to scope results to: only memories whose acl is
+	// empty (unrestricted) or overlaps that entity's own id or one level of
+	// its member_of groups are returned. Omitted/nil applies no acl
+	// filtering. See SearchResourceImpl.resolveACLScope.
+	As *string `json:"as,omitempty"`
 }
 
 type SearchResult struct {
@@ -102,6 +107,9 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 			Since:  req.Filters.Since,
 			Until:  req.Filters.Until,
 		}
+	}
+	if req.As != nil {
+		filters.ACLScope = resource.resolveACLScope(*req.As)
 	}
 
 	hits, err := resource.index.Search(c.Request.Context(), req.Query, queryEmbedding, k, filters)

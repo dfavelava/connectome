@@ -292,6 +292,95 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 }
 
+func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
+	pool := testPool(t)
+	dao := NewEmbeddingsDao(pool)
+	ctx := context.Background()
+
+	suffix := uuid.NewString()
+	openKey := "mem_open_" + suffix + ".md"      // acl: {} - unrestricted, visible regardless of scope
+	partyAKey := "mem_party_a_" + suffix + ".md" // acl: {"Party A"} - direct membership
+	groupKey := "mem_group_" + suffix + ".md"    // acl: {"Adventurers"} - reachable only via member_of
+	gmKey := "mem_gm_" + suffix + ".md"          // acl: {"GM"} - never in scope below
+	t.Cleanup(func() {
+		for _, key := range []string{openKey, partyAKey, groupKey, gmKey} {
+			_ = dao.DeleteEmbeddingsForKey(context.Background(), key)
+		}
+	})
+
+	now := time.Now().UTC()
+	seed := func(key string, acl []string) {
+		t.Helper()
+		if err := dao.InsertEmbeddings(ctx, key, []EmbeddingRow{
+			{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", ACL: acl, CreatedAt: now},
+		}); err != nil {
+			t.Fatalf("insert %s: %v", key, err)
+		}
+	}
+	seed(openKey, []string{})
+	seed(partyAKey, []string{"Party A"})
+	seed(groupKey, []string{"Adventurers"})
+	seed(gmKey, []string{"GM"})
+
+	query := unitVector(768, 0)
+	keysAmongOurs := func(hits []SearchHit) map[string]bool {
+		found := make(map[string]bool)
+		for _, h := range hits {
+			if h.MemoryKey == openKey || h.MemoryKey == partyAKey || h.MemoryKey == groupKey || h.MemoryKey == gmKey {
+				found[h.MemoryKey] = true
+			}
+		}
+		return found
+	}
+
+	t.Run("nil ACLScope applies no acl filtering", func(t *testing.T) {
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		found := keysAmongOurs(hits)
+		for _, key := range []string{openKey, partyAKey, groupKey, gmKey} {
+			if !found[key] {
+				t.Fatalf("expected %s visible with no ACLScope, got %v", key, found)
+			}
+		}
+	})
+
+	t.Run("ACLScope includes unrestricted and directly-matching acl, excludes the rest", func(t *testing.T) {
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A"}})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		found := keysAmongOurs(hits)
+		if !found[openKey] {
+			t.Fatalf("expected unrestricted %s visible, got %v", openKey, found)
+		}
+		if !found[partyAKey] {
+			t.Fatalf("expected directly-scoped %s visible, got %v", partyAKey, found)
+		}
+		if found[groupKey] {
+			t.Fatalf("expected %s excluded (acl not in scope), got %v", groupKey, found)
+		}
+		if found[gmKey] {
+			t.Fatalf("expected %s excluded (acl not in scope), got %v", gmKey, found)
+		}
+	})
+
+	t.Run("ACLScope resolved through one level of member_of reaches the group's acl", func(t *testing.T) {
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A", "Adventurers"}})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		found := keysAmongOurs(hits)
+		if !found[groupKey] {
+			t.Fatalf("expected %s visible once its acl group is in scope, got %v", groupKey, found)
+		}
+		if found[gmKey] {
+			t.Fatalf("expected %s still excluded, got %v", gmKey, found)
+		}
+	})
+}
+
 func TestEmbeddingsDaoTruncateEmbeddingsRemovesAllRows(t *testing.T) {
 	pool := testPool(t)
 	dao := NewEmbeddingsDao(pool)

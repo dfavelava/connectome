@@ -147,6 +147,10 @@ def test_supersede_relationship_patches_in_place(backend: Backend) -> None:
     asyncio.run(_supersede_relationship(backend))
 
 
+def test_recall_as_scopes_results_by_acl_and_member_of(backend: Backend) -> None:
+    asyncio.run(_recall_as_acl_scope(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -266,7 +270,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
     try:
         # --- plain semantic search surfaces the relevant memory first ------
         results = json.loads(
-            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False)
+            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False, as_=None)
         )["results"]
         keys = [r["key"] for r in results]
         assert keys, "expected at least one recall result"
@@ -278,7 +282,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         fact_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False)
+                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False, as_=None)
             )["results"]
         }
         assert tea_key not in fact_keys
@@ -288,7 +292,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         ada_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False)
+                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False, as_=None)
             )["results"]
         }
         assert ada_key in ada_keys
@@ -296,7 +300,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
 
         # --- hydrate returns the full memory body, not just a snippet ------
         hydrated = json.loads(
-            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True)
+            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True, as_=None)
         )["results"]
         assert hydrated
         assert "David prefers tea over coffee in the afternoon." in hydrated[0]["content"]
@@ -436,3 +440,105 @@ async def _supersede_relationship(backend: Backend) -> None:
         await forget("ent_david.json")
         await forget("ent_tea.json")
         await forget("ent_coffee.json")
+
+
+async def _recall_as_acl_scope(backend: Backend) -> None:
+    from daybidmcp.server import (
+        Entity,
+        Relationship,
+        forget,
+        get_memory,
+        recall,
+        remember,
+    )
+
+    alice = Entity(id="alice", name="Alice")
+
+    membership = json.loads(
+        await remember(
+            content="Alice joins Party A.",
+            entities=[alice],
+            relationships=[Relationship(subjectEntityId="alice", predicate="member_of", objectEntityId="Party A")],
+            memory_type="fact",
+            acl=None,
+        )
+    )
+    membership_key = membership["key"]
+
+    open_memory = json.loads(
+        await remember(
+            content="The ruins north of Ashvale are said to be cursed.",
+            entities=[],
+            relationships=[],
+            memory_type="note",
+            acl=None,
+        )
+    )
+    party_memory = json.loads(
+        await remember(
+            content="Party A found a hidden door in the ruins north of Ashvale.",
+            entities=[],
+            relationships=[],
+            memory_type="note",
+            acl=["Party A"],
+        )
+    )
+    gm_memory = json.loads(
+        await remember(
+            content="The ruins north of Ashvale actually hide a rival GM plot twist.",
+            entities=[],
+            relationships=[],
+            memory_type="note",
+            acl=["GM"],
+        )
+    )
+    open_key, party_key, gm_key = open_memory["key"], party_memory["key"], gm_memory["key"]
+
+    try:
+        # --- member_of, special-cased from the relationship, merges onto the ---
+        # --- entity record without introducing a new primitive -----------------
+        alice_entity = json.loads(await get_memory("ent_alice.json"))
+        alice_record = json.loads(alice_entity["content"])
+        assert alice_record["member_of"] == ["Party A"]
+
+        # --- as="alice" sees unrestricted and Party A memories, not GM's -------
+        scoped = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="what do we know about the ruins north of Ashvale",
+                    k=10,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_="alice",
+                )
+            )["results"]
+        }
+        assert open_key in scoped
+        assert party_key in scoped
+        assert gm_key not in scoped
+
+        # --- omitting `as` applies no acl filtering at all ---------------------
+        unscoped = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="what do we know about the ruins north of Ashvale",
+                    k=10,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_=None,
+                )
+            )["results"]
+        }
+        assert {open_key, party_key, gm_key} <= unscoped
+    finally:
+        for key in (membership_key, open_key, party_key, gm_key):
+            await forget(key)
+        await forget("ent_alice.json")
