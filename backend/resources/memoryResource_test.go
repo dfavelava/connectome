@@ -264,6 +264,42 @@ func TestMemoryReadRejectsMissingKey(t *testing.T) {
 	}
 }
 
+func TestMemoryWriteResolvesACLFromFrontmatterOrDefault(t *testing.T) {
+	srv, _, indexer := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	// An explicit acl in the frontmatter is stored as-is.
+	const explicitKey = "mem_acl_explicit.md"
+	explicitDoc := "---\n" +
+		"type: note\n" +
+		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"entities: []\n" +
+		"acl: [\"GM\"]\n" +
+		"---\nbody\n"
+	body, contentType := multipartBody(t, []filePart{{name: explicitKey, content: explicitDoc}})
+	resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	rows := indexer.rowsFor(explicitKey)
+	if len(rows) != 1 || len(rows[0].ACL) != 1 || rows[0].ACL[0] != "GM" {
+		t.Fatalf("expected acl [GM], got %+v", rows)
+	}
+
+	// A memory whose frontmatter omits acl entirely picks up DEFAULT_ACL.
+	t.Setenv("DEFAULT_ACL", "players")
+	const defaultedKey = "mem_acl_default.md"
+	body, contentType = multipartBody(t, []filePart{{name: defaultedKey, content: memoryDocument("note", "body", nil)}})
+	resp, payload = doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	rows = indexer.rowsFor(defaultedKey)
+	if len(rows) != 1 || len(rows[0].ACL) != 1 || rows[0].ACL[0] != "players" {
+		t.Fatalf("expected default acl [players], got %+v", rows)
+	}
+}
+
 func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
 	srv, connectomeDir, indexer := newTestServer(t)
 	base := srv.URL + "/api/connectome/memory"

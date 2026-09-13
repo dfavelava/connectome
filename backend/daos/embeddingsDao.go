@@ -26,6 +26,7 @@ type EmbeddingRow struct {
 	Dim        int
 	Type       string
 	EntityIDs  []string
+	ACL        []string
 	CreatedAt  time.Time
 }
 
@@ -57,9 +58,9 @@ func (dao *EmbeddingsDao) InsertEmbeddings(ctx context.Context, memoryKey string
 	batch := &pgx.Batch{}
 	for _, row := range rows {
 		batch.Queue(
-			`INSERT INTO embeddings (memory_key, chunk_index, embedding, chunk_text, model, dim, type, entity_ids, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			memoryKey, row.ChunkIndex, pgvector.NewVector(row.Embedding), row.ChunkText, row.Model, row.Dim, row.Type, row.EntityIDs, row.CreatedAt,
+			`INSERT INTO embeddings (memory_key, chunk_index, embedding, chunk_text, model, dim, type, entity_ids, acl, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			memoryKey, row.ChunkIndex, pgvector.NewVector(row.Embedding), row.ChunkText, row.Model, row.Dim, row.Type, row.EntityIDs, row.ACL, row.CreatedAt,
 		)
 	}
 

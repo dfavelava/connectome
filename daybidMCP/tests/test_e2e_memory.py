@@ -139,6 +139,10 @@ def test_remember_recall_roundtrip(backend: Backend) -> None:
     asyncio.run(_recall_roundtrip(backend))
 
 
+def test_remember_creates_stub_entities_and_writes_acl(backend: Backend) -> None:
+    asyncio.run(_stub_entities_and_acl(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -151,6 +155,7 @@ async def _roundtrip(backend: Backend) -> None:
             entities=[ada],
             relationships=[],
             memory_type="fact",
+            acl=None,
         )
     )
     memory_key = first["key"]
@@ -184,6 +189,7 @@ async def _roundtrip(backend: Backend) -> None:
             entities=[ada],
             relationships=[],
             memory_type="fact",
+            acl=None,
         )
     )
     second_key = second["key"]
@@ -224,6 +230,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             entities=[],
             relationships=[],
             memory_type="preference",
+            acl=None,
         )
     )
     ada_fact = json.loads(
@@ -232,6 +239,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             entities=[ada],
             relationships=[],
             memory_type="fact",
+            acl=None,
         )
     )
     grace_fact = json.loads(
@@ -240,15 +248,17 @@ async def _recall_roundtrip(backend: Backend) -> None:
             entities=[grace],
             relationships=[],
             memory_type="fact",
+            acl=None,
         )
     )
     tea_key, ada_key, grace_key = tea["key"], ada_fact["key"], grace_fact["key"]
 
-    # recall is an @mcp.tool()-decorated function: its parameters default to
-    # Field(...) sentinels that only resolve to real values when the MCP
-    # protocol layer binds arguments from JSON. Calling it directly, as this
-    # test does, means every argument must be passed explicitly - an omitted
-    # one stays a raw FieldInfo object and fails to JSON-encode.
+    # recall (like remember, above) is an @mcp.tool()-decorated function: its
+    # parameters default to Field(...) sentinels that only resolve to real
+    # values when the MCP protocol layer binds arguments from JSON. Calling
+    # it directly, as this test does, means every argument must be passed
+    # explicitly - an omitted one stays a raw FieldInfo object and fails to
+    # JSON-encode (or, for remember's acl, fails MemoryMetadata validation).
     try:
         # --- plain semantic search surfaces the relevant memory first ------
         results = json.loads(
@@ -289,3 +299,48 @@ async def _recall_roundtrip(backend: Backend) -> None:
     finally:
         for key in (tea_key, ada_key, grace_key):
             await forget(key)
+
+
+async def _stub_entities_and_acl(backend: Backend) -> None:
+    from daybidmcp.server import Entity, Relationship, forget, get_memory, remember
+
+    david = Entity(id="david", name="David")
+
+    result = json.loads(
+        await remember(
+            content="David likes tea, which Grace also enjoys.",
+            entities=[david],
+            relationships=[
+                Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea"),
+                Relationship(subjectEntityId="grace", predicate="likes", objectEntityId="tea"),
+            ],
+            memory_type="fact",
+            acl=["GM"],
+        )
+    )
+    memory_key = result["key"]
+
+    try:
+        # --- relationship endpoints not in `entities` get bare stub records -
+        assert set(result["entity_keys"]) == {"ent_david.json", "ent_tea.json", "ent_grace.json"}
+
+        tea_entity = json.loads(await get_memory("ent_tea.json"))
+        tea_record = json.loads(tea_entity["content"])
+        assert tea_record["id"] == "tea"
+        assert tea_record["name"] is None
+        assert tea_record["memory_ids"] == [memory_key]
+
+        grace_entity = json.loads(await get_memory("ent_grace.json"))
+        grace_record = json.loads(grace_entity["content"])
+        assert grace_record["id"] == "grace"
+        assert grace_record["name"] is None
+
+        # --- acl round-trips through the stored frontmatter -----------------
+        fetched = json.loads(await get_memory(memory_key))
+        metadata, _ = _parse_frontmatter(fetched["content"])
+        assert metadata["acl"] == ["GM"]
+    finally:
+        await forget(memory_key)
+        await forget("ent_david.json")
+        await forget("ent_tea.json")
+        await forget("ent_grace.json")

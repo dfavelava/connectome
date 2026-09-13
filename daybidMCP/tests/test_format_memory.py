@@ -8,6 +8,7 @@ from daybidmcp.server import (
     Entity,
     Relationship,
     format_memory,
+    stub_entities_for_relationships,
 )
 
 CREATED_AT = "2026-09-09T00:00:00+00:00"
@@ -70,3 +71,67 @@ def test_format_memory_preserves_multiline_body_including_triple_dash():
 
     assert post.content.strip("\n") == body.strip("\n")
     assert post["id"] == "mem_multi.md"
+
+
+def test_format_memory_omits_acl_key_when_not_given():
+    document, payload = format_memory("mem_no_acl.md", "body", [], [], CREATED_AT)
+
+    post = frontmatter.loads(document)
+
+    assert "acl" not in post.metadata
+    assert "acl" not in payload["metadata"]
+
+
+def test_format_memory_writes_explicit_acl():
+    document, payload = format_memory(
+        "mem_acl.md", "body", [], [], CREATED_AT, acl=["GM"]
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["acl"] == ["GM"]
+    assert payload["metadata"]["acl"] == ["GM"]
+
+
+def test_format_memory_preserves_explicit_empty_acl():
+    document, payload = format_memory(
+        "mem_acl_empty.md", "body", [], [], CREATED_AT, acl=[]
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["acl"] == []
+    assert payload["metadata"]["acl"] == []
+
+
+def test_stub_entities_for_relationships_creates_bare_stubs_for_unlisted_ids():
+    known = [Entity(id="david", name="David")]
+    relationships = [
+        Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea"),
+        Relationship(subjectEntityId="grace", predicate="knows", objectEntityId="david"),
+    ]
+
+    stubs = stub_entities_for_relationships(known, relationships)
+
+    assert [e.id for e in stubs] == ["tea", "grace"]
+    assert all(e.name is None for e in stubs)
+
+
+def test_stub_entities_for_relationships_dedupes_and_skips_known_and_none():
+    known = [Entity(id="david")]
+    relationships = [
+        Relationship(subjectEntityId="tea", predicate="is_a", objectEntityId=None),
+        Relationship(subjectEntityId="tea", predicate="is_a", objectEntityId="drink"),
+        Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea"),
+    ]
+
+    stubs = stub_entities_for_relationships(known, relationships)
+
+    assert [e.id for e in stubs] == ["tea", "drink"]
+
+
+def test_stub_entities_for_relationships_empty_when_all_known():
+    known = [Entity(id="david"), Entity(id="tea")]
+    relationships = [Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea")]
+
+    assert stub_entities_for_relationships(known, relationships) == []

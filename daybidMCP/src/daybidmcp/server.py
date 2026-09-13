@@ -76,6 +76,7 @@ class MemoryMetadata(BaseModel):
     source: MemorySource
     entities: list[str] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
+    acl: list[str] | None = None
 
 class Memory(BaseModel):
     id: str
@@ -111,6 +112,7 @@ def format_memory(
     relationships: list[Relationship],
     created_at: str,
     memory_type: str = DEFAULT_MEMORY_TYPE,
+    acl: list[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
     metadata = MemoryMetadata(
         id=id,
@@ -119,8 +121,14 @@ def format_memory(
         source=MemorySource(type=MEMORY_SOURCE_TYPE, created_at=created_at),
         entities=[entity.id for entity in entities],
         relationships=relationships,
+        acl=acl,
     )
     metadata_payload = metadata.model_dump(mode="json")
+    if acl is None:
+        # Omit the key entirely (rather than writing `acl: null`) so the Go
+        # backend can tell "no acl given" apart from "explicitly cleared" and
+        # apply its configured DEFAULT_ACL only in the former case.
+        del metadata_payload["acl"]
     yaml_data = yaml.dump(metadata_payload, sort_keys=False).strip("\n")
     document = f"---\n{yaml_data}\n---\n{content}\n"
     return document, {
@@ -138,6 +146,27 @@ def merge_memory_ids(existing: list[str] | None, new_memory_id: str) -> list[str
     if new_memory_id not in memory_ids:
         memory_ids.append(new_memory_id)
     return memory_ids
+
+
+def stub_entities_for_relationships(
+    entities: list[Entity], relationships: list[Relationship]
+) -> list[Entity]:
+    """Bare stub entities for relationship endpoints not already in entities.
+
+    A relationship's subjectEntityId/objectEntityId may name an id that
+    wasn't passed in entities explicitly. Rather than erroring, such ids get
+    a nameless stub Entity so an ent_*.json record still gets created for
+    them and future memories can merge into it.
+    """
+    known_ids = {entity.id for entity in entities}
+    stub_ids: list[str] = []
+    seen: set[str] = set()
+    for relationship in relationships:
+        for entity_id in (relationship.subjectEntityId, relationship.objectEntityId):
+            if entity_id is not None and entity_id not in known_ids and entity_id not in seen:
+                seen.add(entity_id)
+                stub_ids.append(entity_id)
+    return [Entity(id=entity_id) for entity_id in stub_ids]
 
 async def request(
     method: str,
@@ -182,6 +211,7 @@ async def remember(
     entities: list[Entity] | None = Field(default=None, description="Entities explicitly mentioned in the memory. Each entity should use a stable ID so future memories can merge into the same entity record."),
     relationships: list[Relationship] | None = Field(default=None, description="Directed relationships between the provided entities. Use this to capture how entities are connected within the memory."),
     memory_type: MemoryType = Field(default=DEFAULT_MEMORY_TYPE, description="The kind of memory: 'note' for a freeform observation, 'fact' for a durable statement of fact, 'preference' for how the user wants things done, or 'event' for something that happened at a point in time."),
+    acl: list[str] | None = Field(default=None, description="Access-control list (entity/group ids) restricting who can access this memory. Omit to apply this Connectome instance's configured default ACL policy (unrestricted if the instance has none configured)."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -189,6 +219,7 @@ async def remember(
     now = datetime.now(UTC)
     memory_entities = entities or []
     memory_relationships = relationships or []
+    memory_entities = memory_entities + stub_entities_for_relationships(memory_entities, memory_relationships)
 
     memory, memory_payload = format_memory(
         memory_id,
@@ -197,6 +228,7 @@ async def remember(
         memory_relationships,
         now.isoformat(),
         memory_type,
+        acl,
     )
 
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]

@@ -171,6 +171,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 
 	rows := make([]daos.EmbeddingRow, len(chunks))
 	createdAt := fm.createdAtOrNow()
+	acl := ResolveACL(fm.ACL)
 	for i, chunk := range chunks {
 		embedding, err := resource.embedder.Embed(chunk)
 		if err != nil {
@@ -184,6 +185,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 			Dim:        len(embedding),
 			Type:       fm.Type,
 			EntityIDs:  fm.Entities,
+			ACL:        acl,
 			CreatedAt:  createdAt,
 		}
 	}

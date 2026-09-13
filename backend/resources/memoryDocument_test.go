@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,35 @@ func TestParseMemoryDocumentExtractsFrontmatterAndBody(t *testing.T) {
 	wantCreatedAt := time.Date(2024, 3, 5, 12, 0, 0, 0, time.UTC)
 	if got := fm.createdAtOrNow(); !got.Equal(wantCreatedAt) {
 		t.Fatalf("expected created_at %v, got %v", wantCreatedAt, got)
+	}
+}
+
+func TestParseMemoryDocumentACLPresenceIsDistinguishable(t *testing.T) {
+	withACL := "---\ntype: note\nacl: [\"GM\"]\n---\nbody\n"
+	fm, _, ok := ParseMemoryDocument(withACL)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+	if fm.ACL == nil || !reflect.DeepEqual(*fm.ACL, []string{"GM"}) {
+		t.Fatalf("expected acl [GM], got %v", fm.ACL)
+	}
+
+	withoutACL := "---\ntype: note\n---\nbody\n"
+	fm, _, ok = ParseMemoryDocument(withoutACL)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+	if fm.ACL != nil {
+		t.Fatalf("expected nil acl when frontmatter omits the key, got %v", *fm.ACL)
+	}
+
+	explicitEmpty := "---\ntype: note\nacl: []\n---\nbody\n"
+	fm, _, ok = ParseMemoryDocument(explicitEmpty)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+	if fm.ACL == nil || len(*fm.ACL) != 0 {
+		t.Fatalf("expected a non-nil, empty acl for an explicit empty list, got %v", fm.ACL)
 	}
 }
 

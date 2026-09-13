@@ -23,6 +23,9 @@ type memoryFrontmatter struct {
 	Type      string   `yaml:"type"`
 	CreatedAt string   `yaml:"created_at"`
 	Entities  []string `yaml:"entities"`
+	// ACL is a pointer so an omitted key (nil) is distinguishable from an
+	// explicit empty list - see ResolveACL in acl.go.
+	ACL *[]string `yaml:"acl"`
 }
 
 // ParseMemoryDocument splits a memory file's raw content into its frontmatter
