@@ -179,6 +179,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 		rows[i] = daos.EmbeddingRow{
 			ChunkIndex: i,
 			Embedding:  embedding,
+			ChunkText:  chunk,
 			Model:      managers.EMBEDDING_MODEL,
 			Dim:        len(embedding),
 			Type:       fm.Type,

@@ -384,6 +384,9 @@ func TestMemoryWriteIndexesRewriteSupersedesDeleteRemoves(t *testing.T) {
 		if row.Dim == 0 || len(row.Embedding) != row.Dim {
 			t.Fatalf("expected a non-empty embedding matching dim, got %v (dim %d)", row.Embedding, row.Dim)
 		}
+		if strings.TrimSpace(row.ChunkText) == "" {
+			t.Fatalf("expected chunk text to be populated for full-text search, got %q", row.ChunkText)
+		}
 	}
 
 	// rewrite: a short memory at the same key supersedes the old rows entirely.

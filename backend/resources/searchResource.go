@@ -21,9 +21,9 @@ const (
 )
 
 // SearchIndex is the subset of *daos.EmbeddingsDao the search resource needs
-// to run a filtered nearest-neighbour search.
+// to run a filtered hybrid (vector + full-text) search.
 type SearchIndex interface {
-	Search(ctx context.Context, query []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error)
+	Search(ctx context.Context, queryText string, queryEmbedding []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error)
 }
 
 type SearchResourceImpl struct {
@@ -104,7 +104,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		}
 	}
 
-	hits, err := resource.index.Search(c.Request.Context(), queryEmbedding, k, filters)
+	hits, err := resource.index.Search(c.Request.Context(), req.Query, queryEmbedding, k, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("search: %v", err)})
 		return
@@ -121,7 +121,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 func (resource *SearchResourceImpl) hydrateResults(hits []daos.SearchHit) []SearchResult {
 	results := make([]SearchResult, 0, len(hits))
 	for _, hit := range hits {
-		result := SearchResult{Key: hit.MemoryKey, Score: scoreFromDistance(hit.Distance), Type: hit.Type}
+		result := SearchResult{Key: hit.MemoryKey, Score: hit.Score, Type: hit.Type}
 		if content, err := resource.manager.GetObject(hit.MemoryKey); err == nil {
 			result.Content = content
 		}
@@ -133,7 +133,7 @@ func (resource *SearchResourceImpl) hydrateResults(hits []daos.SearchHit) []Sear
 func (resource *SearchResourceImpl) snippetResults(hits []daos.SearchHit) []SearchResult {
 	results := make([]SearchResult, 0, len(hits))
 	for _, hit := range hits {
-		result := SearchResult{Key: hit.MemoryKey, Score: scoreFromDistance(hit.Distance), Type: hit.Type}
+		result := SearchResult{Key: hit.MemoryKey, Score: hit.Score, Type: hit.Type}
 		if content, err := resource.manager.GetObject(hit.MemoryKey); err == nil {
 			result.Snippet = snippetForChunk(content, hit.ChunkIndex)
 		}
@@ -143,8 +143,9 @@ func (resource *SearchResourceImpl) snippetResults(hits []daos.SearchHit) []Sear
 }
 
 // snippetForChunk re-derives the chunk at chunkIndex from a memory's current
-// content instead of storing chunk text in the embeddings table, keeping the
-// blob store the single source of truth for memory bodies (see
+// content rather than reading the embeddings table's chunk_text column
+// (there only to feed full-text search - see backend/daos/embeddingsDao.go),
+// keeping the blob store the single source of truth for memory bodies (see
 // backend/resources/memoryDocument.go's ChunkWords, used at index time). If
 // the memory has been rewritten since it was indexed, chunkIndex may no
 // longer line up exactly; out-of-range indexes fall back to the first chunk
@@ -168,10 +169,4 @@ func snippetForChunk(content string, chunkIndex int) string {
 		snippet = strings.TrimSpace(snippet[:snippetChars]) + "…"
 	}
 	return snippet
-}
-
-// scoreFromDistance turns cosine distance (0 = identical, larger = further)
-// into a similarity score (higher = better match) for API consumers.
-func scoreFromDistance(distance float64) float64 {
-	return 1 - distance
 }

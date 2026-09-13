@@ -138,6 +138,22 @@ cd backend
 POSTGRES_HOST=localhost go run ./cmd/reindex -dry-run
 ```
 
+### Hybrid search ranking
+
+`POST /api/connectome/memory/search` ranks results with a blend of vector
+similarity and Postgres full-text search, combined via reciprocal-rank
+fusion (RRF): each signal contributes `weight / (k + rank)` to a chunk's
+score, where `rank` is that chunk's position in that signal's own ranked
+candidate list. This is what lets an exact name or rare term rank correctly
+even when its embedding similarity alone is mediocre.
+
+Blend weights are configurable via `backend/.env` (see `backend/.env.example`):
+
+- `SEARCH_VECTOR_WEIGHT` (default `0.6`)
+- `SEARCH_TEXT_WEIGHT` (default `0.4`)
+- `SEARCH_RRF_K` (default `60`) - the RRF rank constant; higher values flatten
+  the influence of rank position, so weights matter more than exact rank.
+
 ## MCP server
 
 The MCP server exposes Daybid memory operations over stdio. Configure `daybidMCP/.env`:

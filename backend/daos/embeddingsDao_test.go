@@ -51,6 +51,8 @@ func testPool(t *testing.T) *pgxpool.Pool {
 			memory_key TEXT NOT NULL,
 			chunk_index INT NOT NULL DEFAULT 0,
 			embedding VECTOR(768) NOT NULL,
+			chunk_text TEXT NOT NULL DEFAULT '',
+			search_vector tsvector GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED,
 			model TEXT NOT NULL,
 			dim INT NOT NULL,
 			type TEXT NOT NULL CHECK (type IN ('note', 'fact', 'preference', 'event')),
@@ -59,6 +61,11 @@ func testPool(t *testing.T) *pgxpool.Pool {
 			UNIQUE (memory_key, chunk_index)
 		)`); err != nil {
 		t.Fatalf("create embeddings table: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS embeddings_search_vector_gin_idx
+			ON embeddings USING gin (search_vector)`); err != nil {
+		t.Fatalf("create search_vector gin index: %v", err)
 	}
 
 	return pool
@@ -191,7 +198,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	query := unitVector(768, 0)
 
 	t.Run("no filters ranks by distance and collapses to the best chunk", func(t *testing.T) {
-		hits, err := dao.Search(ctx, query, 10, SearchFilters{})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -215,7 +222,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("type filter excludes other types", func(t *testing.T) {
-		hits, err := dao.Search(ctx, query, 10, SearchFilters{Type: strPtr("fact")})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Type: strPtr("fact")})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -227,7 +234,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("entity filter matches only memories with that entity", func(t *testing.T) {
-		hits, err := dao.Search(ctx, query, 10, SearchFilters{Entity: strPtr("grace")})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Entity: strPtr("grace")})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -244,7 +251,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 
 	t.Run("since/until filter by created_at", func(t *testing.T) {
 		since := now.Add(-1 * time.Hour)
-		hits, err := dao.Search(ctx, query, 10, SearchFilters{Since: &since})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Since: &since})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -255,7 +262,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 		}
 
 		until := yesterday.Add(1 * time.Hour)
-		hits, err = dao.Search(ctx, query, 10, SearchFilters{Until: &until})
+		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{Until: &until})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -271,7 +278,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("k limits the number of results", func(t *testing.T) {
-		hits, err := dao.Search(ctx, query, 1, SearchFilters{Entity: strPtr("ada")})
+		hits, err := dao.Search(ctx, "", query, 1, SearchFilters{Entity: strPtr("ada")})
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
