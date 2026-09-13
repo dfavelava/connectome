@@ -3,12 +3,16 @@ import frontmatter
 from daybidmcp.server import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_RELATIONSHIP_KIND,
+    MEMBER_OF_PREDICATE,
     MEMORY_SCHEMA_VERSION,
     MEMORY_SOURCE_TYPE,
     MEMORY_TYPES,
     Entity,
+    EntityWithMemories,
     Relationship,
     format_memory,
+    member_of_groups_by_subject,
+    merge_member_of,
     stub_entities_for_relationships,
 )
 
@@ -194,3 +198,51 @@ def test_stub_entities_for_relationships_empty_when_all_known():
     relationships = [Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea")]
 
     assert stub_entities_for_relationships(known, relationships) == []
+
+
+def test_entity_with_memories_defaults_member_of_to_none():
+    entity = EntityWithMemories(id="alice")
+
+    assert entity.member_of is None
+
+
+def test_merge_member_of_appends_new_groups_and_dedupes():
+    assert merge_member_of(None, ["Party A"]) == ["Party A"]
+    assert merge_member_of(["Party A"], ["Party A", "Adventurers"]) == ["Party A", "Adventurers"]
+    assert merge_member_of(["Party A"], []) == ["Party A"]
+
+
+def test_member_of_groups_by_subject_special_cases_the_predicate():
+    relationships = [
+        Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Party A"),
+        Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Adventurers"),
+        Relationship(subjectEntityId="bob", predicate="likes", objectEntityId="tea"),
+        Relationship(subjectEntityId="carol", predicate=MEMBER_OF_PREDICATE, objectEntityId=None),
+    ]
+
+    groups = member_of_groups_by_subject(relationships)
+
+    assert groups == {"alice": ["Party A", "Adventurers"]}
+
+
+def test_format_memory_round_trips_member_of_relationship_like_any_other():
+    document, payload = format_memory(
+        "mem_membership.md",
+        "Alice joins the party.",
+        [],
+        [Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Party A")],
+        CREATED_AT,
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["relationships"] == [
+        {
+            "subjectEntityId": "alice",
+            "predicate": MEMBER_OF_PREDICATE,
+            "objectEntityId": "Party A",
+            "kind": DEFAULT_RELATIONSHIP_KIND,
+            "superseded_by": None,
+        }
+    ]
+    assert payload["metadata"]["relationships"][0]["predicate"] == MEMBER_OF_PREDICATE

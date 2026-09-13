@@ -217,6 +217,55 @@ func TestSearchDefaultsKAndReturnsEmptyResultsWhenNoHits(t *testing.T) {
 	}
 }
 
+func TestSearchResolvesACLScopeFromAsEntitysMemberOf(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, map[string]string{
+		"ent_alice.json": `{"id":"alice","name":"Alice","member_of":["Party A","Adventurers"]}`,
+	})
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything","as":"alice"}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	got := index.gotFilters.ACLScope
+	if len(got) != 3 || got[0] != "alice" || got[1] != "Party A" || got[2] != "Adventurers" {
+		t.Fatalf("expected ACLScope [alice, Party A, Adventurers], got %v", got)
+	}
+}
+
+func TestSearchWithoutAsAppliesNoACLScope(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything"}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	if index.gotFilters.ACLScope != nil {
+		t.Fatalf("expected nil ACLScope with no `as`, got %v", index.gotFilters.ACLScope)
+	}
+}
+
+func TestSearchAsWithoutEntityRecordScopesToJustThatID(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything","as":"ghost"}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	got := index.gotFilters.ACLScope
+	if len(got) != 1 || got[0] != "ghost" {
+		t.Fatalf("expected ACLScope [ghost] when the entity record doesn't exist, got %v", got)
+	}
+}
+
 func TestSearchClampsKToMax(t *testing.T) {
 	srv, index := newSearchTestServer(t, nil, nil)
 

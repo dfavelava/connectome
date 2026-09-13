@@ -39,6 +39,13 @@ MEMORY_SOURCE_TYPE = "mcp"
 RelationshipKind = Literal["fact", "hypothesis", "rumor"]
 DEFAULT_RELATIONSHIP_KIND: RelationshipKind = "fact"
 
+# A relationship predicate with special meaning to `remember`: rather than
+# just recording the edge, it also merges the object entity id onto the
+# subject entity's member_of list (see EntityWithMemories.member_of), so
+# recall's `as` scoping can resolve one level of group membership as an O(1)
+# read of the entity record instead of a relationship-table scan.
+MEMBER_OF_PREDICATE = "member_of"
+
 _ = load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 mcp = MCPServer(
@@ -63,6 +70,7 @@ class Entity(BaseModel):
 
 class EntityWithMemories(Entity):
     memory_ids: list[str] | None = None
+    member_of: list[str] | None = None
 
 class Relationship(BaseModel):
     """A directed relationship between entities extracted from the memory.
@@ -163,6 +171,29 @@ def merge_memory_ids(existing: list[str] | None, new_memory_id: str) -> list[str
     return memory_ids
 
 
+def merge_member_of(existing: list[str] | None, new_group_ids: list[str]) -> list[str]:
+    member_of = list(existing or [])
+    for group_id in new_group_ids:
+        if group_id not in member_of:
+            member_of.append(group_id)
+    return member_of
+
+
+def member_of_groups_by_subject(relationships: list[Relationship]) -> dict[str, list[str]]:
+    """Group ids each subject entity gains member_of from this memory's relationships.
+
+    Special-cases the `member_of` predicate (per 1.1B: no new primitive, just
+    a relationship like any other) so `remember` can merge it onto the
+    subject entity's member_of list alongside the relationship itself.
+    """
+    groups_by_subject: dict[str, list[str]] = {}
+    for relationship in relationships:
+        if relationship.predicate != MEMBER_OF_PREDICATE or relationship.objectEntityId is None:
+            continue
+        groups_by_subject.setdefault(relationship.subjectEntityId, []).append(relationship.objectEntityId)
+    return groups_by_subject
+
+
 def stub_entities_for_relationships(
     entities: list[Entity], relationships: list[Relationship]
 ) -> list[Entity]:
@@ -248,6 +279,7 @@ async def remember(
 
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]
     existing_entity_contents = await batch_read(entity_keys)
+    new_groups_by_subject = member_of_groups_by_subject(memory_relationships)
 
     files: list[tuple[str, tuple[str, BytesIO, str]]] = [
         ("file", (memory_id, BytesIO(memory.encode("utf-8")), "text/plain; charset=utf-8"))
@@ -256,12 +288,16 @@ async def remember(
     for entity, entity_id in zip(memory_entities, entity_keys):
         existing_entity = existing_entity_contents.get(entity_id)
         existing_memory_ids: list[str] | None = None
+        existing_member_of: list[str] | None = None
         if existing_entity:
-            existing_memory_ids = EntityWithMemories.model_validate_json(existing_entity).memory_ids
+            existing_parsed = EntityWithMemories.model_validate_json(existing_entity)
+            existing_memory_ids = existing_parsed.memory_ids
+            existing_member_of = existing_parsed.member_of
 
         entity_with_memories = EntityWithMemories(
             **entity.model_dump(),
             memory_ids=merge_memory_ids(existing_memory_ids, memory_id),
+            member_of=merge_member_of(existing_member_of, new_groups_by_subject.get(entity.id, [])),
         )
         files.append(
             ("file", (entity_id, BytesIO(format_entity(entity_with_memories).encode("utf-8")), "application/json"))
@@ -314,6 +350,7 @@ async def recall(
     since: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or after this time."),
     until: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or before this time."),
     hydrate: bool = Field(default=False, description="Return each result's full memory body instead of a short snippet."),
+    as_: str | None = Field(default=None, alias="as", description="Restrict results to memories visible to this entity id: its acl must be empty (unrestricted) or contain the id directly or a group it is member_of (one level, no recursion). Omit for unrestricted access."),
 ) -> str:
     """Search memory by semantic similarity to query and return ranked results as JSON, each with a key, score, type, and either a snippet or (with hydrate=True) the full memory body."""
     filters: dict[str, str] = {}
@@ -329,6 +366,8 @@ async def recall(
     body: dict[str, object] = {"query": query, "k": k, "hydrate": hydrate}
     if filters:
         body["filters"] = filters
+    if as_ is not None:
+        body["as"] = as_
 
     response = await request("POST", "/memory/search", json_body=body)
     return response.text

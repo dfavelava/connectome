@@ -125,6 +125,12 @@ type SearchFilters struct {
 	Entity *string
 	Since  *time.Time
 	Until  *time.Time
+
+	// ACLScope, when non-nil, restricts results to embeddings whose acl
+	// column is empty (unrestricted) or overlaps this set of entity/group
+	// ids - see SearchResourceImpl.resolveACLScope, which resolves it from
+	// an `as` id. A nil ACLScope applies no acl filtering at all.
+	ACLScope []string
 }
 
 // SearchHit is one memory's best-ranked chunk from a hybrid (vector +
@@ -212,12 +218,15 @@ type chunkRef struct {
 
 // candidateFilterSQL is shared by the vector and full-text candidate queries
 // below (each binds it starting at $2, with $1 reserved for its own ranking
-// expression and $6 for the LIMIT).
+// expression, $6 for the LIMIT, and $7 for ACLScope). A NULL $7 (ACLScope
+// nil - no `as` given) applies no acl filtering; otherwise a row passes when
+// its acl is empty (unrestricted) or overlaps $7.
 const candidateFilterSQL = `
 	  ($2::text IS NULL OR type = $2)
 	  AND ($3::text IS NULL OR $3 = ANY(entity_ids))
 	  AND ($4::timestamptz IS NULL OR created_at >= $4)
-	  AND ($5::timestamptz IS NULL OR created_at <= $5)`
+	  AND ($5::timestamptz IS NULL OR created_at <= $5)
+	  AND ($7::text[] IS NULL OR cardinality(acl) = 0 OR acl && $7::text[])`
 
 // vectorCandidates returns up to limit chunks ordered by ascending cosine
 // distance to query, at chunk granularity (not collapsed per memory key).
@@ -228,7 +237,7 @@ func (dao *EmbeddingsDao) vectorCandidates(ctx context.Context, query []float32,
 		 WHERE`+candidateFilterSQL+`
 		 ORDER BY embedding <=> $1
 		 LIMIT $6`,
-		pgvector.NewVector(query), filters.Type, filters.Entity, filters.Since, filters.Until, limit,
+		pgvector.NewVector(query), filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("vector candidates: %w", err)
@@ -251,12 +260,23 @@ func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, 
 		   AND`+candidateFilterSQL+`
 		 ORDER BY ts_rank(search_vector, query) DESC
 		 LIMIT $6`,
-		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit,
+		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("text candidates: %w", err)
 	}
 	return scanCandidates(rows)
+}
+
+// nilIfEmpty maps an empty or nil ACLScope to a nil slice, so pgx encodes it
+// as SQL NULL - candidateFilterSQL's "$7::text[] IS NULL" branch then reads
+// as "no `as` given" rather than "acl scope of zero ids" (which would match
+// nothing).
+func nilIfEmpty(scope []string) []string {
+	if len(scope) == 0 {
+		return nil
+	}
+	return scope
 }
 
 // scanCandidates drains rows of (memory_key, chunk_index, type) into ordered
