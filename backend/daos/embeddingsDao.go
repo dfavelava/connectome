@@ -75,6 +75,16 @@ func (dao *EmbeddingsDao) DeleteEmbeddingsForKey(ctx context.Context, memoryKey 
 	return nil
 }
 
+// TruncateEmbeddings removes every row from the embeddings table. Used by
+// cmd/reindex to rebuild the index from scratch, so a rebuild is never left
+// holding both old and re-derived rows for the same key.
+func (dao *EmbeddingsDao) TruncateEmbeddings(ctx context.Context) error {
+	if _, err := dao.pool.Exec(ctx, `TRUNCATE TABLE embeddings`); err != nil {
+		return fmt.Errorf("truncate embeddings: %w", err)
+	}
+	return nil
+}
+
 // NearestNeighbors returns the k chunks closest to query by cosine distance.
 func (dao *EmbeddingsDao) NearestNeighbors(ctx context.Context, query []float32, k int) ([]NearestNeighbor, error) {
 	rows, err := dao.pool.Query(ctx,

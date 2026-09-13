@@ -25,11 +25,11 @@ type memoryFrontmatter struct {
 	Entities  []string `yaml:"entities"`
 }
 
-// parseMemoryDocument splits a memory file's raw content into its frontmatter
+// ParseMemoryDocument splits a memory file's raw content into its frontmatter
 // and body. ok is false for content with no valid, indexable frontmatter -
 // notably the plain-JSON entity records stored under the same key namespace,
 // which have no frontmatter at all.
-func parseMemoryDocument(content string) (frontmatter memoryFrontmatter, body string, ok bool) {
+func ParseMemoryDocument(content string) (frontmatter memoryFrontmatter, body string, ok bool) {
 	const delim = "---"
 	if !strings.HasPrefix(content, delim+"\n") {
 		return memoryFrontmatter{}, "", false
@@ -60,10 +60,10 @@ func (fm memoryFrontmatter) createdAtOrNow() time.Time {
 	return time.Now().UTC()
 }
 
-// chunkWords splits text into ~chunkSize-word chunks with overlap words of
+// ChunkWords splits text into ~chunkSize-word chunks with overlap words of
 // context repeated between consecutive chunks. Word count stands in for a
 // token count here since no tokenizer is wired up for nomic-embed-text.
-func chunkWords(text string, chunkSize, overlap int) []string {
+func ChunkWords(text string, chunkSize, overlap int) []string {
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return nil

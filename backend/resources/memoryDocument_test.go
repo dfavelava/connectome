@@ -14,7 +14,7 @@ func TestParseMemoryDocumentExtractsFrontmatterAndBody(t *testing.T) {
 		"---\n" +
 		"David prefers tea over coffee.\n"
 
-	fm, body, ok := parseMemoryDocument(content)
+	fm, body, ok := ParseMemoryDocument(content)
 	if !ok {
 		t.Fatalf("expected ok=true for a valid memory document")
 	}
@@ -44,7 +44,7 @@ func TestParseMemoryDocumentRejectsNonMemoryContent(t *testing.T) {
 
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, _, ok := parseMemoryDocument(content); ok {
+			if _, _, ok := ParseMemoryDocument(content); ok {
 				t.Fatalf("expected ok=false for %s", name)
 			}
 		})
@@ -69,7 +69,7 @@ func TestChunkWordsSplitsWithOverlap(t *testing.T) {
 	}
 	text := strings.Join(words, " ")
 
-	chunks := chunkWords(text, 10, 2)
+	chunks := ChunkWords(text, 10, 2)
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks (10, 10 w/ 2 overlap, remainder), got %d: %v", len(chunks), chunks)
 	}
@@ -82,7 +82,7 @@ func TestChunkWordsSplitsWithOverlap(t *testing.T) {
 }
 
 func TestChunkWordsSingleChunkWhenShort(t *testing.T) {
-	chunks := chunkWords("short body here", 512, 50)
+	chunks := ChunkWords("short body here", 512, 50)
 	if len(chunks) != 1 {
 		t.Fatalf("expected 1 chunk for short text, got %d: %v", len(chunks), chunks)
 	}
@@ -92,7 +92,7 @@ func TestChunkWordsSingleChunkWhenShort(t *testing.T) {
 }
 
 func TestChunkWordsEmptyTextProducesNoChunks(t *testing.T) {
-	if chunks := chunkWords("   \n\t  ", 512, 50); len(chunks) != 0 {
+	if chunks := ChunkWords("   \n\t  ", 512, 50); len(chunks) != 0 {
 		t.Fatalf("expected no chunks for blank text, got %v", chunks)
 	}
 }
