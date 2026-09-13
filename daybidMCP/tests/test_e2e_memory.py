@@ -270,7 +270,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
     try:
         # --- plain semantic search surfaces the relevant memory first ------
         results = json.loads(
-            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False)
+            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False, as_=None)
         )["results"]
         keys = [r["key"] for r in results]
         assert keys, "expected at least one recall result"
@@ -282,7 +282,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         fact_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False)
+                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False, as_=None)
             )["results"]
         }
         assert tea_key not in fact_keys
@@ -292,7 +292,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         ada_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False)
+                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False, as_=None)
             )["results"]
         }
         assert ada_key in ada_keys
@@ -300,7 +300,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
 
         # --- hydrate returns the full memory body, not just a snippet ------
         hydrated = json.loads(
-            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True)
+            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True, as_=None)
         )["results"]
         assert hydrated
         assert "David prefers tea over coffee in the afternoon." in hydrated[0]["content"]
