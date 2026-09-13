@@ -31,10 +31,12 @@ func (fakeEmbedder) Embed(input string) ([]float32, error) {
 }
 
 // fakeIndexer stands in for *daos.EmbeddingsDao in tests: it records rows
-// in memory instead of talking to a real Postgres.
+// in memory instead of talking to a real Postgres, and counts inserts so
+// tests can assert whether a re-index happened.
 type fakeIndexer struct {
-	mu   sync.Mutex
-	rows map[string][]daos.EmbeddingRow
+	mu      sync.Mutex
+	rows    map[string][]daos.EmbeddingRow
+	inserts int
 }
 
 func newFakeIndexer() *fakeIndexer {
@@ -44,6 +46,7 @@ func newFakeIndexer() *fakeIndexer {
 func (f *fakeIndexer) InsertEmbeddings(_ context.Context, memoryKey string, rows []daos.EmbeddingRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inserts++
 	f.rows[memoryKey] = append(f.rows[memoryKey], rows...)
 	return nil
 }
@@ -59,6 +62,12 @@ func (f *fakeIndexer) rowsFor(key string) []daos.EmbeddingRow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]daos.EmbeddingRow{}, f.rows[key]...)
+}
+
+func (f *fakeIndexer) insertCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inserts
 }
 
 // newTestServer wires the memory routes onto a fresh gin engine backed by the
@@ -447,5 +456,108 @@ func TestMemoryWriteIndexesRewriteSupersedesDeleteRemoves(t *testing.T) {
 	}
 	if rows := indexer.rowsFor(key); len(rows) != 0 {
 		t.Fatalf("expected delete to remove rows, got %d", len(rows))
+	}
+}
+
+// memoryDocumentWithRelationships builds a connectome memory document whose
+// frontmatter carries the given raw YAML relationships block, matching the
+// shape daybidmcp's format_memory writes once Relationship gains kind and
+// superseded_by.
+func memoryDocumentWithRelationships(relationshipsYAML string) string {
+	return "---\n" +
+		"version: connectome/memory/0.1\n" +
+		"id: mem_rel.md\n" +
+		"type: fact\n" +
+		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"source:\n  type: mcp\n  created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"entities: [\"david\", \"tea\"]\n" +
+		"relationships:\n" + relationshipsYAML +
+		"---\n" +
+		"David likes tea.\n"
+}
+
+func TestSupersedeRelationshipPatchesWithoutReindexing(t *testing.T) {
+	srv, connectomeDir, indexer := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	const key = "mem_rel.md"
+	doc := memoryDocumentWithRelationships(
+		"  - subjectEntityId: david\n    predicate: likes\n    objectEntityId: tea\n    kind: fact\n    superseded_by: null\n",
+	)
+
+	body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
+	resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	insertsAfterWrite := indexer.insertCount()
+	if insertsAfterWrite == 0 {
+		t.Fatalf("expected the initial write to index the memory")
+	}
+
+	patchBody := `{"key":"mem_rel.md","subjectEntityId":"david","predicate":"likes","objectEntityId":"tea","superseded_by":"mem_correction.md"}`
+	resp, payload = doRequest(t, http.MethodPatch, base+"/relationship", strings.NewReader(patchBody), map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("supersede: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	if got := decodeJSON(t, payload)["message"]; got != "success" {
+		t.Fatalf("supersede: expected message success, got %v", got)
+	}
+
+	if got := indexer.insertCount(); got != insertsAfterWrite {
+		t.Fatalf("expected supersede to never call the embedder, insert count went from %d to %d", insertsAfterWrite, got)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(connectomeDir, key))
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	if !strings.Contains(string(onDisk), "superseded_by: mem_correction.md") {
+		t.Fatalf("expected patched file to carry the new superseded_by, got:\n%s", onDisk)
+	}
+	if !strings.Contains(string(onDisk), "David likes tea.") {
+		t.Fatalf("expected body to survive the patch untouched, got:\n%s", onDisk)
+	}
+}
+
+func TestSupersedeRelationshipReturnsNotFoundForMissingMemory(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	patchBody := `{"key":"mem_missing.md","subjectEntityId":"david","predicate":"likes","objectEntityId":"tea","superseded_by":"mem_correction.md"}`
+	resp, payload := doRequest(t, http.MethodPatch, base+"/relationship", strings.NewReader(patchBody), map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for a missing memory, got %d (%s)", resp.StatusCode, payload)
+	}
+}
+
+func TestSupersedeRelationshipReturnsNotFoundForMissingRelationship(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	const key = "mem_rel.md"
+	doc := memoryDocumentWithRelationships(
+		"  - subjectEntityId: david\n    predicate: likes\n    objectEntityId: tea\n    kind: fact\n    superseded_by: null\n",
+	)
+	body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
+	resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	patchBody := `{"key":"mem_rel.md","subjectEntityId":"david","predicate":"dislikes","objectEntityId":"tea","superseded_by":"mem_correction.md"}`
+	resp, payload = doRequest(t, http.MethodPatch, base+"/relationship", strings.NewReader(patchBody), map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for a non-matching relationship, got %d (%s)", resp.StatusCode, payload)
+	}
+}
+
+func TestSupersedeRelationshipRejectsMissingRequiredFields(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	resp, payload := doRequest(t, http.MethodPatch, base+"/relationship", strings.NewReader(`{"key":"mem_rel.md"}`), map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when subjectEntityId/predicate are missing, got %d (%s)", resp.StatusCode, payload)
 	}
 }

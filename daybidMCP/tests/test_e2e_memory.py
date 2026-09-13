@@ -143,6 +143,10 @@ def test_remember_creates_stub_entities_and_writes_acl(backend: Backend) -> None
     asyncio.run(_stub_entities_and_acl(backend))
 
 
+def test_supersede_relationship_patches_in_place(backend: Backend) -> None:
+    asyncio.run(_supersede_relationship(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -344,3 +348,91 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
         await forget("ent_david.json")
         await forget("ent_tea.json")
         await forget("ent_grace.json")
+
+
+async def _supersede_relationship(backend: Backend) -> None:
+    from daybidmcp.server import (
+        Entity,
+        Relationship,
+        forget,
+        get_memory,
+        remember,
+        supersede_relationship,
+    )
+
+    david = Entity(id="david", name="David")
+
+    result = json.loads(
+        await remember(
+            content="David likes tea, and also likes coffee.",
+            entities=[david],
+            relationships=[
+                Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea"),
+                Relationship(subjectEntityId="david", predicate="likes", objectEntityId="coffee"),
+            ],
+            memory_type="fact",
+            acl=None,
+        )
+    )
+    memory_key = result["key"]
+
+    try:
+        original = json.loads(await get_memory(memory_key))
+        original_metadata, original_body = _parse_frontmatter(original["content"])
+
+        # --- superseding one relationship leaves the other, and the content, alone ---
+        await supersede_relationship(
+            memory_id=memory_key,
+            subjectEntityId="david",
+            predicate="likes",
+            objectEntityId="tea",
+            superseded_by="mem_correction.md",
+        )
+
+        patched = json.loads(await get_memory(memory_key))
+        metadata, body = _parse_frontmatter(patched["content"])
+
+        relationships = {(r["subjectEntityId"], r["objectEntityId"]): r for r in metadata["relationships"]}
+        assert relationships[("david", "tea")]["superseded_by"] == "mem_correction.md"
+        assert relationships[("david", "coffee")]["superseded_by"] is None
+        assert body == original_body
+        assert metadata["created_at"] == original_metadata["created_at"]
+        assert metadata["id"] == original_metadata["id"]
+
+        # --- clearing a supersession with superseded_by=None un-supersedes it ---
+        await supersede_relationship(
+            memory_id=memory_key,
+            subjectEntityId="david",
+            predicate="likes",
+            objectEntityId="tea",
+            superseded_by=None,
+        )
+        cleared = json.loads(await get_memory(memory_key))
+        cleared_metadata, _ = _parse_frontmatter(cleared["content"])
+        cleared_relationships = {(r["subjectEntityId"], r["objectEntityId"]): r for r in cleared_metadata["relationships"]}
+        assert cleared_relationships[("david", "tea")]["superseded_by"] is None
+
+        # --- a relationship that doesn't exist on the memory is an error --------
+        with pytest.raises(httpx.HTTPStatusError):
+            await supersede_relationship(
+                memory_id=memory_key,
+                subjectEntityId="david",
+                predicate="dislikes",
+                objectEntityId="tea",
+                superseded_by="mem_correction.md",
+            )
+
+        # --- a memory key that doesn't exist is an error -------------------------
+        with pytest.raises(httpx.HTTPStatusError):
+            await supersede_relationship(
+                memory_id="mem_does_not_exist.md",
+                subjectEntityId="david",
+                predicate="likes",
+                objectEntityId="tea",
+                superseded_by="mem_correction.md",
+            )
+    finally:
+        await forget(memory_key)
+        await forget("ent_david.json")
+        await forget("ent_tea.json")
+        await forget("ent_coffee.json")

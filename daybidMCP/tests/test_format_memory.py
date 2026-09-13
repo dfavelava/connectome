@@ -2,6 +2,7 @@ import frontmatter
 
 from daybidmcp.server import (
     DEFAULT_MEMORY_TYPE,
+    DEFAULT_RELATIONSHIP_KIND,
     MEMORY_SCHEMA_VERSION,
     MEMORY_SOURCE_TYPE,
     MEMORY_TYPES,
@@ -37,7 +38,13 @@ def test_format_memory_produces_parseable_frontmatter():
     assert post["entities"] == ["david"]
     assert post["source"] == {"type": MEMORY_SOURCE_TYPE, "created_at": CREATED_AT}
     assert post["relationships"] == [
-        {"subjectEntityId": "david", "predicate": "prefers", "objectEntityId": "tea"}
+        {
+            "subjectEntityId": "david",
+            "predicate": "prefers",
+            "objectEntityId": "tea",
+            "kind": DEFAULT_RELATIONSHIP_KIND,
+            "superseded_by": None,
+        }
     ]
 
     # The structured payload mirrors the frontmatter block.
@@ -102,6 +109,58 @@ def test_format_memory_preserves_explicit_empty_acl():
 
     assert post["acl"] == []
     assert payload["metadata"]["acl"] == []
+
+
+def test_relationship_defaults_kind_to_fact_and_superseded_by_to_none():
+    relationship = Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea")
+
+    assert relationship.kind == DEFAULT_RELATIONSHIP_KIND == "fact"
+    assert relationship.superseded_by is None
+
+
+def test_relationship_accepts_explicit_kind_and_superseded_by():
+    relationship = Relationship(
+        subjectEntityId="david",
+        predicate="likes",
+        objectEntityId="tea",
+        kind="rumor",
+        superseded_by="mem_correction.md",
+    )
+
+    assert relationship.kind == "rumor"
+    assert relationship.superseded_by == "mem_correction.md"
+
+
+def test_format_memory_round_trips_relationship_kind_and_superseded_by():
+    document, payload = format_memory(
+        "mem_kind.md",
+        "body",
+        [],
+        [
+            Relationship(
+                subjectEntityId="david",
+                predicate="suspects",
+                objectEntityId="grace",
+                kind="hypothesis",
+                superseded_by="mem_confirmed.md",
+            )
+        ],
+        CREATED_AT,
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["relationships"] == [
+        {
+            "subjectEntityId": "david",
+            "predicate": "suspects",
+            "objectEntityId": "grace",
+            "kind": "hypothesis",
+            "superseded_by": "mem_confirmed.md",
+        }
+    ]
+    assert payload["metadata"]["relationships"][0]["kind"] == "hypothesis"
+    assert payload["metadata"]["relationships"][0]["superseded_by"] == "mem_confirmed.md"
 
 
 def test_stub_entities_for_relationships_creates_bare_stubs_for_unlisted_ids():

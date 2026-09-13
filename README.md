@@ -84,6 +84,7 @@ POST   /api/connectome/memory/batch
 POST   /api/connectome/memory/batch/read
 GET    /api/connectome/memory/list
 DELETE /api/connectome/memory/
+PATCH  /api/connectome/memory/relationship
 POST   /api/llm/embed
 ```
 
