@@ -12,7 +12,9 @@ from daybidmcp.server import (
     Relationship,
     format_memory,
     member_of_groups_by_subject,
+    merge_kind,
     merge_member_of,
+    merge_meta,
     stub_entities_for_relationships,
 )
 
@@ -230,6 +232,36 @@ def test_merge_member_of_appends_new_groups_and_dedupes():
     assert merge_member_of(None, ["Party A"]) == ["Party A"]
     assert merge_member_of(["Party A"], ["Party A", "Adventurers"]) == ["Party A", "Adventurers"]
     assert merge_member_of(["Party A"], []) == ["Party A"]
+
+
+def test_entity_defaults_kind_and_meta_to_none():
+    entity = Entity(id="alice")
+
+    assert entity.kind is None
+    assert entity.meta is None
+
+
+def test_entity_accepts_free_form_kind_and_meta():
+    entity = Entity(id="alice", kind="location", meta={"status": "scouted"})
+
+    assert entity.kind == "location"
+    assert entity.meta == {"status": "scouted"}
+
+
+def test_merge_kind_prefers_new_value_and_falls_back_to_existing():
+    assert merge_kind(None, "location") == "location"
+    assert merge_kind("location", None) == "location"
+    assert merge_kind("location", "region") == "region"
+
+
+def test_merge_meta_shallow_merges_new_keys_over_existing():
+    assert merge_meta(None, None) is None
+    assert merge_meta(None, {"status": "scouted"}) == {"status": "scouted"}
+    assert merge_meta({"status": "scouted"}, None) == {"status": "scouted"}
+    assert merge_meta({"status": "scouted", "danger": "low"}, {"status": "cleared"}) == {
+        "status": "cleared",
+        "danger": "low",
+    }
 
 
 def test_member_of_groups_by_subject_special_cases_the_predicate():

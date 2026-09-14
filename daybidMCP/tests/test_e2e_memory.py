@@ -143,6 +143,10 @@ def test_remember_creates_stub_entities_and_writes_acl(backend: Backend) -> None
     asyncio.run(_stub_entities_and_acl(backend))
 
 
+def test_remember_merges_kind_and_meta_onto_entity_record(backend: Backend) -> None:
+    asyncio.run(_kind_and_meta_merge(backend))
+
+
 def test_supersede_relationship_patches_in_place(backend: Backend) -> None:
     asyncio.run(_supersede_relationship(backend))
 
@@ -240,6 +244,59 @@ async def _roundtrip(backend: Backend) -> None:
         if second_key is not None:
             await forget(second_key)
         await forget("ent_ada.json")
+
+
+async def _kind_and_meta_merge(backend: Backend) -> None:
+    from daybidmcp.server import Entity, forget, get_memory, remember
+
+    cave = Entity(id="cave", kind="location", meta={"status": "rumored"})
+
+    first = json.loads(
+        await remember(
+            content="Adventurers hear rumors of a cave to the north.",
+            entities=[cave],
+            relationships=[],
+            memory_type="note",
+            acl=None,
+            derived_from=None,
+        )
+    )
+    key = first["key"]
+    second_key: str | None = None
+    try:
+        entity_path = backend.connectome_dir / "ent_cave.json"
+        entity_record = json.loads(entity_path.read_text())
+        assert entity_record["kind"] == "location"
+        assert entity_record["meta"] == {"status": "rumored"}
+
+        # --- remember again: kind is replaced, meta shallow-merges ---------
+        scouted_cave = Entity(id="cave", kind="dungeon", meta={"status": "scouted"})
+        second = json.loads(
+            await remember(
+                content="Scouts confirm the cave and map its entrance.",
+                entities=[scouted_cave],
+                relationships=[],
+                memory_type="note",
+                acl=None,
+                derived_from=None,
+            )
+        )
+        second_key = second["key"]
+
+        entity_record = json.loads(entity_path.read_text())
+        assert entity_record["kind"] == "dungeon"
+        assert entity_record["meta"] == {"status": "scouted"}
+
+        # --- get_memory returns the entity record's kind/meta unchanged ----
+        fetched = json.loads(await get_memory("ent_cave.json"))
+        fetched_entity = json.loads(fetched["content"])
+        assert fetched_entity["kind"] == "dungeon"
+        assert fetched_entity["meta"] == {"status": "scouted"}
+    finally:
+        await forget(key)
+        if second_key is not None:
+            await forget(second_key)
+        await forget("ent_cave.json")
 
 
 async def _recall_roundtrip(backend: Backend) -> None:

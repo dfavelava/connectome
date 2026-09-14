@@ -67,6 +67,8 @@ class Entity(BaseModel):
 
     id: str = Field(description="A stable unique identifier for the entity, such as a slug, username, or system ID. Reuse the same ID across memories to link them together.")
     name: str | None = Field(default=None, description="A human-readable display name for the entity, if one is available.")
+    kind: str | None = Field(default=None, description="A free-form, caller-defined tag for the entity's type, such as 'location' or 'person'. Connectome imposes no vocabulary, enum, or validation on this value - it's the calling application's convention to define. Overwrites any existing kind on this entity when given; omit to leave an existing kind unchanged.")
+    meta: dict[str, object] | None = Field(default=None, description="An opaque, caller-defined JSON object for arbitrary structured data about the entity (e.g. {'status': 'scouted'}). Connectome does not interpret, validate, or enforce any schema on its contents. Shallow-merged into any existing meta on this entity, with keys given here overriding existing keys of the same name.")
 
 class EntityWithMemories(Entity):
     memory_ids: list[str] | None = None
@@ -172,6 +174,16 @@ def merge_memory_ids(existing: list[str] | None, new_memory_id: str) -> list[str
     if new_memory_id not in memory_ids:
         memory_ids.append(new_memory_id)
     return memory_ids
+
+
+def merge_kind(existing: str | None, new: str | None) -> str | None:
+    return new if new is not None else existing
+
+
+def merge_meta(existing: dict[str, object] | None, new: dict[str, object] | None) -> dict[str, object] | None:
+    if existing is None and new is None:
+        return None
+    return {**(existing or {}), **(new or {})}
 
 
 def merge_member_of(existing: list[str] | None, new_group_ids: list[str]) -> list[str]:
@@ -294,15 +306,21 @@ async def remember(
         existing_entity = existing_entity_contents.get(entity_id)
         existing_memory_ids: list[str] | None = None
         existing_member_of: list[str] | None = None
+        existing_kind: str | None = None
+        existing_meta: dict[str, object] | None = None
         if existing_entity:
             existing_parsed = EntityWithMemories.model_validate_json(existing_entity)
             existing_memory_ids = existing_parsed.memory_ids
             existing_member_of = existing_parsed.member_of
+            existing_kind = existing_parsed.kind
+            existing_meta = existing_parsed.meta
 
         entity_with_memories = EntityWithMemories(
-            **entity.model_dump(),
+            **entity.model_dump(exclude={"kind", "meta"}),
             memory_ids=merge_memory_ids(existing_memory_ids, memory_id),
             member_of=merge_member_of(existing_member_of, new_groups_by_subject.get(entity.id, [])),
+            kind=merge_kind(existing_kind, entity.kind),
+            meta=merge_meta(existing_meta, entity.meta),
         )
         files.append(
             ("file", (entity_id, BytesIO(format_entity(entity_with_memories).encode("utf-8")), "application/json"))
