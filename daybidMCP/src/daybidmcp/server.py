@@ -373,7 +373,7 @@ async def recall(
     since: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or after this time."),
     until: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or before this time."),
     hydrate: bool = Field(default=False, description="Return each result's full memory body instead of a short snippet."),
-    as_: str | None = Field(default=None, alias="as", description="Restrict results to memories visible to this entity id: its acl must be empty (unrestricted) or contain the id directly or a group it is member_of (one level, no recursion). Omit for unrestricted access."),
+    as_: str | None = Field(default=None, validation_alias="as", description="Restrict results to memories visible to this entity id: its acl must be empty (unrestricted) or contain the id directly or a group it is member_of (one level, no recursion). Omit for unrestricted access."),
 ) -> str:
     """Search memory by semantic similarity to query and return ranked results as JSON, each with a key, score, type, and either a snippet or (with hydrate=True) the full memory body."""
     filters: dict[str, str] = {}
