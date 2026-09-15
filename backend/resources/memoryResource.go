@@ -125,7 +125,7 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, gin.H{"content": content})
+	c.JSON(200, gin.H{"content": HydrateMemoryDocument(content)})
 }
 
 func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {

@@ -52,6 +52,10 @@ type fullMemoryFrontmatter struct {
 	// (nil) round-trips without one, matching format_memory's behavior of
 	// omitting "acl" entirely rather than writing "acl: null".
 	ACL *[]string `yaml:"acl,omitempty"`
+	// DerivedFrom mirrors MemoryMetadata.derived_from in server.py. Unlike
+	// acl, format_memory always includes this key (as null for a root
+	// memory), so it round-trips without omitempty.
+	DerivedFrom *string `yaml:"derived_from"`
 }
 
 // relationshipMatches reports whether rel names the same

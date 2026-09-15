@@ -309,6 +309,58 @@ func TestMemoryWriteResolvesACLFromFrontmatterOrDefault(t *testing.T) {
 	}
 }
 
+// TestMemoryReadHydratesACLForPreOneOneMemory exercises get_memory's read
+// path (GET /memory/): a memory written before acl existed has no acl key
+// on disk, and the response should resolve it through this instance's
+// DEFAULT_ACL, without rewriting the stored blob.
+func TestMemoryReadHydratesACLForPreOneOneMemory(t *testing.T) {
+	srv, connectomeDir, _ := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	const key = "mem_pre11.md"
+	doc := memoryDocument("note", "body", nil) // no acl key at all
+
+	body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
+	resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	t.Run("DEFAULT_ACL set resolves the read to that default", func(t *testing.T) {
+		t.Setenv("DEFAULT_ACL", "GM")
+		resp, payload := doRequest(t, http.MethodGet, base+"/?key="+key, nil, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("read: expected 200, got %d (%s)", resp.StatusCode, payload)
+		}
+		content, _ := decodeJSON(t, payload)["content"].(string)
+		fm := parseHydratedFrontmatter(t, content)
+		if fm.ACL == nil || len(*fm.ACL) != 1 || (*fm.ACL)[0] != "GM" {
+			t.Fatalf("expected hydrated read to resolve acl to [GM], got %v", fm.ACL)
+		}
+	})
+
+	t.Run("no DEFAULT_ACL leaves the read unrestricted", func(t *testing.T) {
+		resp, payload := doRequest(t, http.MethodGet, base+"/?key="+key, nil, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("read: expected 200, got %d (%s)", resp.StatusCode, payload)
+		}
+		content, _ := decodeJSON(t, payload)["content"].(string)
+		fm := parseHydratedFrontmatter(t, content)
+		if fm.ACL == nil || len(*fm.ACL) != 0 {
+			t.Fatalf("expected hydrated read to stay unrestricted ([]), got %v", fm.ACL)
+		}
+	})
+
+	// The stored blob itself is never rewritten by a read.
+	onDisk, err := os.ReadFile(filepath.Join(connectomeDir, key))
+	if err != nil {
+		t.Fatalf("read stored file: %v", err)
+	}
+	if string(onDisk) != doc {
+		t.Fatalf("expected the stored blob to be untouched by hydration, got %q", string(onDisk))
+	}
+}
+
 func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
 	srv, connectomeDir, indexer := newTestServer(t)
 	base := srv.URL + "/api/connectome/memory"

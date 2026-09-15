@@ -131,7 +131,7 @@ func (resource *SearchResourceImpl) hydrateResults(hits []daos.SearchHit) []Sear
 	for _, hit := range hits {
 		result := SearchResult{Key: hit.MemoryKey, Score: hit.Score, Type: hit.Type}
 		if content, err := resource.manager.GetObject(hit.MemoryKey); err == nil {
-			result.Content = content
+			result.Content = HydrateMemoryDocument(content)
 		}
 		results = append(results, result)
 	}

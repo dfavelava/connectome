@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"gopkg.in/yaml.v3"
 
 	"daybid-dev-service/daos"
 	"daybid-dev-service/managers"
@@ -163,7 +164,15 @@ func TestSearchReturnsRankedSnippets(t *testing.T) {
 
 func TestSearchHydrateReturnsFullContent(t *testing.T) {
 	const key = "mem_short.md"
-	content := memoryDocument("note", "short body here", nil)
+	// An explicit (even empty) acl means hydration has nothing to resolve,
+	// so the stored document round-trips byte-for-byte - see
+	// TestSearchHydrateResolvesACLForPreOneOneMemory for the defaulting case.
+	content := "---\n" +
+		"type: note\n" +
+		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"entities: []\n" +
+		"acl: []\n" +
+		"---\nshort body here\n"
 
 	srv, _ := newSearchTestServer(t, []daos.SearchHit{
 		{MemoryKey: key, ChunkIndex: 0, Type: "note", Score: 0.9},
@@ -190,6 +199,46 @@ func TestSearchHydrateReturnsFullContent(t *testing.T) {
 	}
 	if decoded.Results[0].Snippet != "" {
 		t.Fatalf("expected no snippet when hydrate is set, got %q", decoded.Results[0].Snippet)
+	}
+}
+
+func TestSearchHydrateResolvesACLForPreOneOneMemory(t *testing.T) {
+	const key = "mem_pre11.md"
+	// A pre-1.1 memory: no acl key at all.
+	content := memoryDocument("note", "short body here", nil)
+
+	t.Setenv("DEFAULT_ACL", "GM")
+	srv, _ := newSearchTestServer(t, []daos.SearchHit{
+		{MemoryKey: key, ChunkIndex: 0, Type: "note", Score: 0.9},
+	}, map[string]string{key: content})
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything","hydrate":true}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	var decoded struct {
+		Results []SearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode %q: %v", payload, err)
+	}
+	if len(decoded.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(decoded.Results))
+	}
+
+	raw, _, ok := splitFrontmatter(decoded.Results[0].Content)
+	if !ok {
+		t.Fatalf("expected hydrated content to still have parseable frontmatter, got %q", decoded.Results[0].Content)
+	}
+	var fm fullMemoryFrontmatter
+	if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
+		t.Fatalf("unmarshal hydrated frontmatter: %v", err)
+	}
+	if fm.ACL == nil || len(*fm.ACL) != 1 || (*fm.ACL)[0] != "GM" {
+		t.Fatalf("expected hydrated content to resolve acl to the configured DEFAULT_ACL [GM], got %v", fm.ACL)
 	}
 }
 

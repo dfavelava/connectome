@@ -195,6 +195,56 @@ func TestRunCountsReadFailures(t *testing.T) {
 	}
 }
 
+// preOneOneMemory is a pre-1.1-shaped memory document: no acl key (acl
+// didn't exist yet) and a relationship with no kind key (kind didn't exist
+// yet either).
+const preOneOneMemory = "---\n" +
+	"type: fact\n" +
+	"created_at: \"2024-03-05T12:00:00Z\"\n" +
+	"entities: [\"david\", \"gm\"]\n" +
+	"relationships:\n" +
+	"  - subjectEntityId: david\n" +
+	"    predicate: reports_to\n" +
+	"    objectEntityId: gm\n" +
+	"---\n" +
+	"David reports to the GM.\n"
+
+// TestRunResolvesACLFromFrontmatterOrDefaultForPreOneOneMemories asserts the
+// second half of "default at read time, no frontmatter migration": a
+// reindex backfills the embeddings table's acl column for a memory that
+// predates acl entirely, through this instance's configured DEFAULT_ACL,
+// without rewriting the memory's stored blob (Run never calls PutObject).
+func TestRunResolvesACLFromFrontmatterOrDefaultForPreOneOneMemories(t *testing.T) {
+	t.Run("DEFAULT_ACL set backfills that default, not world-readable", func(t *testing.T) {
+		t.Setenv("DEFAULT_ACL", "GM")
+		manager := &fakeManager{objects: map[string]string{"mem_pre11.md": preOneOneMemory}}
+		store := newFakeStore()
+
+		if _, err := Run(context.Background(), manager, &fakeEmbedder{}, store, false); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		rows := store.rows["mem_pre11.md"]
+		if len(rows) == 0 || len(rows[0].ACL) != 1 || rows[0].ACL[0] != "GM" {
+			t.Fatalf("expected reindexed acl [GM], got %+v", rows)
+		}
+	})
+
+	t.Run("DEFAULT_ACL unset stays unrestricted rather than silently GM-only", func(t *testing.T) {
+		manager := &fakeManager{objects: map[string]string{"mem_pre11.md": preOneOneMemory}}
+		store := newFakeStore()
+
+		if _, err := Run(context.Background(), manager, &fakeEmbedder{}, store, false); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		rows := store.rows["mem_pre11.md"]
+		if len(rows) == 0 || len(rows[0].ACL) != 0 {
+			t.Fatalf("expected reindexed acl [] (unrestricted), got %+v", rows)
+		}
+	})
+}
+
 func TestRunPropagatesListError(t *testing.T) {
 	manager := &fakeManager{listErr: errors.New("boom")}
 	embedder := &fakeEmbedder{}
