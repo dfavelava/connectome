@@ -200,5 +200,6 @@ manager, so it needs the Go toolchain on `PATH` (it is skipped otherwise).
 
 - `backend/` — Go API, storage managers, authentication, and Ollama integration
 - `daybidMCP/` — Python MCP server and client-side memory formatting
+- `discordbot/` — Discord bot for connectome; currently just a standalone `ConnectomeClient` HTTP client (see [`discordbot/README.md`](discordbot/README.md))
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
 - `.connectome/` — local memory volume used by the local storage manager
