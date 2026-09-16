@@ -36,9 +36,10 @@ type EntityWithMemories struct {
 }
 
 // entityKey returns the blob store key for an entity id, matching the
-// ent_<id>.json convention daybidmcp's remember writes entity records under.
+// ent_<id>.json convention daybidmcp's remember writes entity records under,
+// scoped to DefaultTome until a caller can select another one.
 func entityKey(id string) string {
-	return "ent_" + id + ".json"
+	return TomeScopedKey(DefaultTome, "ent_"+id+".json")
 }
 
 // resolveACLScope returns the set of entity/group ids whose presence in a

@@ -115,7 +115,7 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 		return
 	}
 
-	content, err := resource.manager.GetObject(key)
+	content, err := resource.manager.GetObject(TomeScopedKey(DefaultTome, key))
 	if err != nil {
 		if errors.Is(err, managers.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", key)})
@@ -150,7 +150,7 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 		go func(key string) {
 			defer wg.Done()
 
-			content, err := resource.manager.GetObject(key)
+			content, err := resource.manager.GetObject(TomeScopedKey(DefaultTome, key))
 			if err != nil {
 				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read %s: %v", key, err)}
 				return
@@ -214,6 +214,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 			Type:       fm.Type,
 			EntityIDs:  fm.Entities,
 			ACL:        acl,
+			TomeID:     DefaultTome,
 			CreatedAt:  createdAt,
 		}
 	}
@@ -248,12 +249,14 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 		return
 	}
 
-	if err := resource.manager.PutObject(fileHeader.Filename, file); err != nil {
+	scopedKey := TomeScopedKey(DefaultTome, fileHeader.Filename)
+
+	if err := resource.manager.PutObject(scopedKey, file); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := resource.IndexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
+	if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -299,12 +302,14 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 				return
 			}
 
-			if err := resource.manager.PutObject(fileHeader.Filename, file); err != nil {
+			scopedKey := TomeScopedKey(DefaultTome, fileHeader.Filename)
+
+			if err := resource.manager.PutObject(scopedKey, file); err != nil {
 				errCh <- fmt.Errorf("upload %s: %w", fileHeader.Filename, err)
 				return
 			}
 
-			if err := resource.IndexMemory(c.Request.Context(), fileHeader.Filename, string(content)); err != nil {
+			if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content)); err != nil {
 				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)
@@ -355,7 +360,9 @@ func (resource *MemoryResourceImpl) supersedeRelationship(c *gin.Context) {
 		return
 	}
 
-	content, err := resource.manager.GetObject(req.Key)
+	scopedKey := TomeScopedKey(DefaultTome, req.Key)
+
+	content, err := resource.manager.GetObject(scopedKey)
 	if err != nil {
 		if errors.Is(err, managers.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", req.Key)})
@@ -375,7 +382,7 @@ func (resource *MemoryResourceImpl) supersedeRelationship(c *gin.Context) {
 		return
 	}
 
-	if err := resource.manager.PutObject(req.Key, newMemoryFile([]byte(patched))); err != nil {
+	if err := resource.manager.PutObject(scopedKey, newMemoryFile([]byte(patched))); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -389,14 +396,14 @@ func (resource *MemoryResourceImpl) delete(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	key := body.Key
+	scopedKey := TomeScopedKey(DefaultTome, body.Key)
 
-	if err := resource.manager.DeleteObject(key); err != nil {
+	if err := resource.manager.DeleteObject(scopedKey); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := resource.embeddings.DeleteEmbeddingsForKey(c.Request.Context(), key); err != nil {
+	if err := resource.embeddings.DeleteEmbeddingsForKey(c.Request.Context(), scopedKey); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

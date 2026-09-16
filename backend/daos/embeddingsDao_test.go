@@ -58,6 +58,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 			type TEXT NOT NULL CHECK (type IN ('note', 'fact', 'preference', 'event')),
 			entity_ids TEXT[] NOT NULL DEFAULT '{}',
 			acl TEXT[] NOT NULL DEFAULT '{}',
+			tome_id TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			UNIQUE (memory_key, chunk_index)
 		)`); err != nil {
