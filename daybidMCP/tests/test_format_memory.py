@@ -1,5 +1,8 @@
+import asyncio
+
 import frontmatter
 
+from daybidmcp import server
 from daybidmcp.server import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_RELATIONSHIP_KIND,
@@ -10,10 +13,9 @@ from daybidmcp.server import (
     Entity,
     EntityWithMemories,
     Relationship,
+    assert_member_of_relationships,
     format_memory,
-    member_of_groups_by_subject,
     merge_kind,
-    merge_member_of,
     merge_meta,
     stub_entities_for_relationships,
 )
@@ -228,12 +230,6 @@ def test_entity_with_memories_defaults_member_of_to_none():
     assert entity.member_of is None
 
 
-def test_merge_member_of_appends_new_groups_and_dedupes():
-    assert merge_member_of(None, ["Party A"]) == ["Party A"]
-    assert merge_member_of(["Party A"], ["Party A", "Adventurers"]) == ["Party A", "Adventurers"]
-    assert merge_member_of(["Party A"], []) == ["Party A"]
-
-
 def test_entity_defaults_kind_and_meta_to_none():
     entity = Entity(id="alice")
 
@@ -264,19 +260,6 @@ def test_merge_meta_shallow_merges_new_keys_over_existing():
     }
 
 
-def test_member_of_groups_by_subject_special_cases_the_predicate():
-    relationships = [
-        Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Party A"),
-        Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Adventurers"),
-        Relationship(subjectEntityId="bob", predicate="likes", objectEntityId="tea"),
-        Relationship(subjectEntityId="carol", predicate=MEMBER_OF_PREDICATE, objectEntityId=None),
-    ]
-
-    groups = member_of_groups_by_subject(relationships)
-
-    assert groups == {"alice": ["Party A", "Adventurers"]}
-
-
 def test_format_memory_round_trips_member_of_relationship_like_any_other():
     document, payload = format_memory(
         "mem_membership.md",
@@ -298,3 +281,38 @@ def test_format_memory_round_trips_member_of_relationship_like_any_other():
         }
     ]
     assert payload["metadata"]["relationships"][0]["predicate"] == MEMBER_OF_PREDICATE
+
+
+def test_assert_member_of_relationships_posts_only_member_of_with_an_object(monkeypatch):
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    async def fake_request(method, path, *, params=None, files=None, json_body=None):
+        calls.append((method, path, json_body))
+        return None
+
+    monkeypatch.setattr(server, "request", fake_request)
+
+    relationships = [
+        Relationship(subjectEntityId="alice", predicate=MEMBER_OF_PREDICATE, objectEntityId="Party A"),
+        Relationship(subjectEntityId="bob", predicate="likes", objectEntityId="tea"),
+        Relationship(subjectEntityId="carol", predicate=MEMBER_OF_PREDICATE, objectEntityId=None),
+    ]
+
+    asyncio.run(assert_member_of_relationships(relationships))
+
+    # Only the member_of relationship with a non-null object hits the shared
+    # backend endpoint - "likes" and the object-less member_of are skipped,
+    # mirroring the special-case the removed member_of_groups_by_subject used
+    # to apply locally.
+    assert calls == [
+        (
+            "POST",
+            "/entity/relationship",
+            {
+                "subjectEntityId": "alice",
+                "predicate": MEMBER_OF_PREDICATE,
+                "objectEntityId": "Party A",
+                "kind": DEFAULT_RELATIONSHIP_KIND,
+            },
+        )
+    ]

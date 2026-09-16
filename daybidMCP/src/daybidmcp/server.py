@@ -186,29 +186,6 @@ def merge_meta(existing: dict[str, object] | None, new: dict[str, object] | None
     return {**(existing or {}), **(new or {})}
 
 
-def merge_member_of(existing: list[str] | None, new_group_ids: list[str]) -> list[str]:
-    member_of = list(existing or [])
-    for group_id in new_group_ids:
-        if group_id not in member_of:
-            member_of.append(group_id)
-    return member_of
-
-
-def member_of_groups_by_subject(relationships: list[Relationship]) -> dict[str, list[str]]:
-    """Group ids each subject entity gains member_of from this memory's relationships.
-
-    Special-cases the `member_of` predicate (per 1.1B: no new primitive, just
-    a relationship like any other) so `remember` can merge it onto the
-    subject entity's member_of list alongside the relationship itself.
-    """
-    groups_by_subject: dict[str, list[str]] = {}
-    for relationship in relationships:
-        if relationship.predicate != MEMBER_OF_PREDICATE or relationship.objectEntityId is None:
-            continue
-        groups_by_subject.setdefault(relationship.subjectEntityId, []).append(relationship.objectEntityId)
-    return groups_by_subject
-
-
 def stub_entities_for_relationships(
     entities: list[Entity], relationships: list[Relationship]
 ) -> list[Entity]:
@@ -259,6 +236,32 @@ async def batch_read(keys: list[str]) -> dict[str, str]:
     return payload.get("contents", {})
 
 
+async def assert_member_of_relationships(relationships: list[Relationship]) -> None:
+    """Merge each member_of relationship onto its subject entity's member_of
+    list via the Go backend's shared /entity/relationship endpoint, rather
+    than re-deriving that merge (dedupe-and-append) in Python - see issue #51.
+    Keeping one implementation of the merge (backend/resources/entity.go's
+    UpsertEntityRelationship) means daybidmcp and discordbot can't drift.
+
+    Skips predicates other than member_of and relationships with no
+    objectEntityId, mirroring the same special-case the removed
+    member_of_groups_by_subject used to apply locally.
+    """
+    for relationship in relationships:
+        if relationship.predicate != MEMBER_OF_PREDICATE or relationship.objectEntityId is None:
+            continue
+        _ = await request(
+            "POST",
+            "/entity/relationship",
+            json_body={
+                "subjectEntityId": relationship.subjectEntityId,
+                "predicate": relationship.predicate,
+                "objectEntityId": relationship.objectEntityId,
+                "kind": relationship.kind,
+            },
+        )
+
+
 @mcp.tool()
 async def get_memory(key: str) -> str:
     """Fetch a stored memory document or entity record by key and return the backend JSON response."""
@@ -294,9 +297,13 @@ async def remember(
         derived_from,
     )
 
+    # Merge member_of onto its subject entity record via the shared backend
+    # endpoint before reading entities below, so existing_member_of already
+    # reflects this memory's member_of relationships.
+    await assert_member_of_relationships(memory_relationships)
+
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]
     existing_entity_contents = await batch_read(entity_keys)
-    new_groups_by_subject = member_of_groups_by_subject(memory_relationships)
 
     files: list[tuple[str, tuple[str, BytesIO, str]]] = [
         ("file", (memory_id, BytesIO(memory.encode("utf-8")), "text/plain; charset=utf-8"))
@@ -318,7 +325,7 @@ async def remember(
         entity_with_memories = EntityWithMemories(
             **entity.model_dump(exclude={"kind", "meta"}),
             memory_ids=merge_memory_ids(existing_memory_ids, memory_id),
-            member_of=merge_member_of(existing_member_of, new_groups_by_subject.get(entity.id, [])),
+            member_of=existing_member_of,
             kind=merge_kind(existing_kind, entity.kind),
             meta=merge_meta(existing_meta, entity.meta),
         )
