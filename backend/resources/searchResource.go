@@ -37,6 +37,9 @@ type SearchFiltersRequest struct {
 	Entity *string    `json:"entity,omitempty"`
 	Since  *time.Time `json:"since,omitempty"`
 	Until  *time.Time `json:"until,omitempty"`
+	// Tome restricts results to this tome id. Omitted/nil searches
+	// DefaultTome, matching search behavior from before tomes existed.
+	Tome *string `json:"tome,omitempty"`
 }
 
 type SearchRequest struct {
@@ -99,13 +102,14 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		return
 	}
 
-	var filters daos.SearchFilters
+	filters := daos.SearchFilters{TomeID: DefaultTome}
 	if req.Filters != nil {
-		filters = daos.SearchFilters{
-			Type:   req.Filters.Type,
-			Entity: req.Filters.Entity,
-			Since:  req.Filters.Since,
-			Until:  req.Filters.Until,
+		filters.Type = req.Filters.Type
+		filters.Entity = req.Filters.Entity
+		filters.Since = req.Filters.Since
+		filters.Until = req.Filters.Until
+		if req.Filters.Tome != nil {
+			filters.TomeID = *req.Filters.Tome
 		}
 	}
 	if req.As != nil {
