@@ -382,6 +382,72 @@ func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
 	})
 }
 
+func TestEmbeddingsDaoSearchFiltersByTomeID(t *testing.T) {
+	pool := testPool(t)
+	dao := NewEmbeddingsDao(pool)
+	ctx := context.Background()
+
+	suffix := uuid.NewString()
+	defaultKey := "mem_default_tome_" + suffix + ".md" // tome_id: "" (unset)
+	otherKey := "mem_other_tome_" + suffix + ".md"     // tome_id: "west-marches"
+	t.Cleanup(func() {
+		for _, key := range []string{defaultKey, otherKey} {
+			_ = dao.DeleteEmbeddingsForKey(context.Background(), key)
+		}
+	})
+
+	now := time.Now().UTC()
+	if err := dao.InsertEmbeddings(ctx, defaultKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert defaultKey: %v", err)
+	}
+	if err := dao.InsertEmbeddings(ctx, otherKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", TomeID: "west-marches", CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert otherKey: %v", err)
+	}
+
+	query := unitVector(768, 0)
+	keysAmongOurs := func(hits []SearchHit) map[string]bool {
+		found := make(map[string]bool)
+		for _, h := range hits {
+			if h.MemoryKey == defaultKey || h.MemoryKey == otherKey {
+				found[h.MemoryKey] = true
+			}
+		}
+		return found
+	}
+
+	t.Run("zero-value TomeID matches only the default tome", func(t *testing.T) {
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		found := keysAmongOurs(hits)
+		if !found[defaultKey] {
+			t.Fatalf("expected %s visible with default TomeID, got %v", defaultKey, found)
+		}
+		if found[otherKey] {
+			t.Fatalf("expected %s excluded from the default tome, got %v", otherKey, found)
+		}
+	})
+
+	t.Run("non-empty TomeID matches only that tome", func(t *testing.T) {
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{TomeID: "west-marches"})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		found := keysAmongOurs(hits)
+		if found[defaultKey] {
+			t.Fatalf("expected %s excluded from tome west-marches, got %v", defaultKey, found)
+		}
+		if !found[otherKey] {
+			t.Fatalf("expected %s visible in tome west-marches, got %v", otherKey, found)
+		}
+	})
+}
+
 func TestEmbeddingsDaoTruncateEmbeddingsRemovesAllRows(t *testing.T) {
 	pool := testPool(t)
 	dao := NewEmbeddingsDao(pool)
