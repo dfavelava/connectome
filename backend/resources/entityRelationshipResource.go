@@ -26,10 +26,12 @@ const defaultEntityRelationshipKind = "fact"
 // also wants to persist the relationship claim itself can reuse this same
 // request shape without a breaking change.
 type EntityRelationshipRequest struct {
-	SubjectEntityID string  `json:"subjectEntityId"`
-	Predicate       string  `json:"predicate"`
-	ObjectEntityID  *string `json:"objectEntityId"`
-	Kind            string  `json:"kind"`
+	SubjectEntityID string         `json:"subjectEntityId"`
+	Predicate       string         `json:"predicate"`
+	ObjectEntityID  *string        `json:"objectEntityId"`
+	Kind            string         `json:"kind"`
+	SubjectKind     *string        `json:"subjectKind"`
+	SubjectMeta     map[string]any `json:"subjectMeta"`
 }
 
 // EntityRelationshipResponse returns the entity records affected by an
@@ -56,10 +58,12 @@ func InitEntityResource(r *gin.RouterGroup, manager managers.MemoryManager) {
 }
 
 // upsertRelationship handles POST /entity/relationship: given
-// {subjectEntityId, predicate, objectEntityId, kind}, it upserts stub
-// ent_<id>.json records for subject/object entities that don't have one yet
-// and, for the member_of predicate, merges objectEntityId into the subject
-// entity's member_of list. See UpsertEntityRelationship.
+// {subjectEntityId, predicate, objectEntityId, kind, subjectKind,
+// subjectMeta}, it upserts stub ent_<id>.json records for subject/object
+// entities that don't have one yet, for the member_of predicate merges
+// objectEntityId into the subject entity's member_of list, and - when given -
+// merges subjectKind/subjectMeta onto the subject entity. See
+// UpsertEntityRelationship.
 func (resource *EntityResourceImpl) upsertRelationship(c *gin.Context) {
 	var req EntityRelationshipRequest
 	if err := c.BindJSON(&req); err != nil {
@@ -77,7 +81,7 @@ func (resource *EntityResourceImpl) upsertRelationship(c *gin.Context) {
 		return
 	}
 
-	subject, object, err := UpsertEntityRelationship(resource.manager, req.SubjectEntityID, req.Predicate, req.ObjectEntityID)
+	subject, object, err := UpsertEntityRelationship(resource.manager, req.SubjectEntityID, req.Predicate, req.ObjectEntityID, req.SubjectKind, req.SubjectMeta)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

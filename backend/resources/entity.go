@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 
 	"daybid-dev-service/managers"
@@ -112,6 +113,32 @@ func mergeMemberOf(existing, newGroupIDs []string) []string {
 	return memberOf
 }
 
+// mergeKind overwrites existing with new when new is given, otherwise leaves
+// existing unchanged - mirrors merge_kind in daybidMCP/src/daybidmcp/server.py.
+func mergeKind(existing, new *string) *string {
+	if new != nil {
+		return new
+	}
+	return existing
+}
+
+// mergeMeta shallow-merges new over existing, with keys in new overriding
+// same-named keys in existing - mirrors merge_meta in
+// daybidMCP/src/daybidmcp/server.py.
+func mergeMeta(existing, new map[string]any) map[string]any {
+	if existing == nil && new == nil {
+		return nil
+	}
+	merged := make(map[string]any, len(existing)+len(new))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range new {
+		merged[key] = value
+	}
+	return merged
+}
+
 // UpsertEntityRelationship upserts stub ent_<id>.json records for the
 // subject/object entities named by a relationship that don't have one yet
 // (mirrors stub_entities_for_relationships), and - for the member_of
@@ -121,9 +148,15 @@ func mergeMemberOf(existing, newGroupIDs []string) []string {
 // discordbot), drive ent_<id>.json into the same state
 // daybidmcp.server.remember would produce.
 //
-// A record is only written back when it's new or its member_of actually
-// changed; an already-existing, untouched entity is left alone.
-func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predicate string, objectID *string) (subject EntityWithMemories, object *EntityWithMemories, err error) {
+// subjectKind/subjectMeta optionally stamp the subject entity's kind/meta
+// fields in the same call (mirrors the Entity.kind/Entity.meta merge that
+// daybidmcp.server.remember applies via merge_kind/merge_meta) - Connectome
+// itself has no opinion on what values callers use here; it just persists
+// and merges whatever a caller (e.g. discordbot's /add-character) passes.
+//
+// A record is only written back when it's new or something about it
+// actually changed; an already-existing, untouched entity is left alone.
+func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predicate string, objectID *string, subjectKind *string, subjectMeta map[string]any) (subject EntityWithMemories, object *EntityWithMemories, err error) {
 	subject, subjectExisted, err := readEntity(manager, subjectID)
 	if err != nil {
 		return EntityWithMemories{}, nil, fmt.Errorf("read subject entity: %w", err)
@@ -134,6 +167,21 @@ func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predica
 		merged := mergeMemberOf(subject.MemberOf, []string{*objectID})
 		if len(merged) != len(subject.MemberOf) {
 			subject.MemberOf = merged
+			subjectChanged = true
+		}
+	}
+
+	if subjectKind != nil {
+		merged := mergeKind(subject.Kind, subjectKind)
+		if !reflect.DeepEqual(subject.Kind, merged) {
+			subject.Kind = merged
+			subjectChanged = true
+		}
+	}
+	if subjectMeta != nil {
+		merged := mergeMeta(subject.Meta, subjectMeta)
+		if !reflect.DeepEqual(subject.Meta, merged) {
+			subject.Meta = merged
 			subjectChanged = true
 		}
 	}

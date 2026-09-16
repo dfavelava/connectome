@@ -97,6 +97,27 @@ func TestEntityRelationshipRouteUpsertsMemberOf(t *testing.T) {
 	}
 }
 
+func TestEntityRelationshipRouteSetsSubjectKindAndMeta(t *testing.T) {
+	srv := newEntityTestServer(t)
+
+	resp, decoded := postRelationship(t, srv, map[string]any{
+		"subjectEntityId": "thorin",
+		"predicate":       "member_of",
+		"objectEntityId":  "discord-1-characters",
+		"subjectKind":     "character",
+		"subjectMeta":     map[string]any{"owner": "discord-1"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if decoded.Subject.Kind == nil || *decoded.Subject.Kind != "character" {
+		t.Fatalf("expected subject kind character, got %+v", decoded.Subject)
+	}
+	if decoded.Subject.Meta["owner"] != "discord-1" {
+		t.Fatalf("expected subject meta.owner discord-1, got %+v", decoded.Subject.Meta)
+	}
+}
+
 func TestEntityRelationshipRouteDefaultsAndValidatesKind(t *testing.T) {
 	srv := newEntityTestServer(t)
 
