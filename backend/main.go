@@ -36,6 +36,7 @@ func main() {
 
 	resources.InitMemoryResource(connectomeGroup, memoryManager, ollamaManager, embeddingsDao)
 	resources.InitSearchResource(connectomeGroup, memoryManager, ollamaManager, embeddingsDao)
+	resources.InitEntityResource(connectomeGroup, memoryManager)
 	resources.InitLLMResource(llmGroup)
 
 	r.Run()
