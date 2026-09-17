@@ -800,7 +800,14 @@ async def _facet_recall(backend: Backend) -> None:
 
 
 async def _tome_scoping(backend: Backend) -> None:
-    from daybidmcp.server import Entity, Relationship, browse_all, forget, get_memory, remember
+    from daybidmcp.server import (
+        Entity,
+        Relationship,
+        browse_all,
+        forget,
+        get_memory,
+        remember,
+    )
 
     tome = "west-marches"
     ada = Entity(id="ada", name="Ada Lovelace")
