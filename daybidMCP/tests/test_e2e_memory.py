@@ -159,6 +159,10 @@ def test_facet_recalls_correctly_for_its_own_audience_alongside_root(backend: Ba
     asyncio.run(_facet_recall(backend))
 
 
+def test_tome_scopes_remember_get_memory_forget_and_entity_records(backend: Backend) -> None:
+    asyncio.run(_tome_scoping(backend))
+
+
 def test_recall_tome_scopes_results_to_the_default_tome(backend: Backend) -> None:
     asyncio.run(_recall_tome_scope(backend))
 
@@ -177,6 +181,7 @@ async def _roundtrip(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     memory_key = first["key"]
@@ -214,6 +219,7 @@ async def _roundtrip(backend: Backend) -> None:
                 memory_type="fact",
                 acl=None,
                 derived_from=None,
+                tome=None,
             )
         )
         second_key = second["key"]
@@ -228,11 +234,11 @@ async def _roundtrip(backend: Backend) -> None:
         assert {memory_key, second_key, "ent_ada.json"} <= listed_keys
 
         # --- get_memory ------------------------------------------------------
-        fetched = json.loads(await get_memory(memory_key))
+        fetched = json.loads(await get_memory(memory_key, tome=None))
         assert "Ada enjoys analytical engines." in fetched["content"]
 
         # --- forget -----------------------------------------------------------
-        deleted = json.loads(await forget(memory_key))
+        deleted = json.loads(await forget(memory_key, tome=None))
         assert deleted == {"message": "deleted", "key": memory_key}
         assert not memory_path.exists(), "memory file still present after forget"
 
@@ -246,8 +252,8 @@ async def _roundtrip(backend: Backend) -> None:
         # instance backing the embeddings table isn't left with an orphaned
         # row when this test runs against it.
         if second_key is not None:
-            await forget(second_key)
-        await forget("ent_ada.json")
+            await forget(second_key, tome=None)
+        await forget("ent_ada.json", tome=None)
 
 
 async def _kind_and_meta_merge(backend: Backend) -> None:
@@ -263,6 +269,7 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
             memory_type="note",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     key = first["key"]
@@ -283,6 +290,7 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
                 memory_type="note",
                 acl=None,
                 derived_from=None,
+                tome=None,
             )
         )
         second_key = second["key"]
@@ -292,15 +300,15 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
         assert entity_record["meta"] == {"status": "scouted"}
 
         # --- get_memory returns the entity record's kind/meta unchanged ----
-        fetched = json.loads(await get_memory("ent_cave.json"))
+        fetched = json.loads(await get_memory("ent_cave.json", tome=None))
         fetched_entity = json.loads(fetched["content"])
         assert fetched_entity["kind"] == "dungeon"
         assert fetched_entity["meta"] == {"status": "scouted"}
     finally:
-        await forget(key)
+        await forget(key, tome=None)
         if second_key is not None:
-            await forget(second_key)
-        await forget("ent_cave.json")
+            await forget(second_key, tome=None)
+        await forget("ent_cave.json", tome=None)
 
 
 async def _recall_roundtrip(backend: Backend) -> None:
@@ -317,6 +325,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             memory_type="preference",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     ada_fact = json.loads(
@@ -327,6 +336,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     grace_fact = json.loads(
@@ -337,6 +347,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     tea_key, ada_key, grace_key = tea["key"], ada_fact["key"], grace_fact["key"]
@@ -386,15 +397,14 @@ async def _recall_roundtrip(backend: Backend) -> None:
         assert "David prefers tea over coffee in the afternoon." in hydrated[0]["content"]
     finally:
         for key in (tea_key, ada_key, grace_key):
-            await forget(key)
+            await forget(key, tome=None)
 
 
 async def _recall_tome_scope(backend: Backend) -> None:
     from daybidmcp.server import forget, recall, remember
 
-    # remember has no tome parameter yet - see 1.2C - so this memory always
-    # lands in the default tome (tome_id ""), same as everything written
-    # before tomes existed.
+    # tome=None lands this memory in the default tome (tome_id ""), same as
+    # everything written before tomes existed.
     stored = json.loads(
         await remember(
             content="The lighthouse keeper at Ashvale hums an old sea shanty every dawn.",
@@ -403,6 +413,7 @@ async def _recall_tome_scope(backend: Backend) -> None:
             memory_type="note",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     memory_key = stored["key"]
@@ -447,7 +458,7 @@ async def _recall_tome_scope(backend: Backend) -> None:
         }
         assert memory_key not in other_tome_keys
     finally:
-        await forget(memory_key)
+        await forget(memory_key, tome=None)
 
 
 async def _stub_entities_and_acl(backend: Backend) -> None:
@@ -466,6 +477,7 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
             memory_type="fact",
             acl=["GM"],
             derived_from=None,
+            tome=None,
         )
     )
     memory_key = result["key"]
@@ -474,26 +486,26 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
         # --- relationship endpoints not in `entities` get bare stub records -
         assert set(result["entity_keys"]) == {"ent_david.json", "ent_tea.json", "ent_grace.json"}
 
-        tea_entity = json.loads(await get_memory("ent_tea.json"))
+        tea_entity = json.loads(await get_memory("ent_tea.json", tome=None))
         tea_record = json.loads(tea_entity["content"])
         assert tea_record["id"] == "tea"
         assert tea_record["name"] is None
         assert tea_record["memory_ids"] == [memory_key]
 
-        grace_entity = json.loads(await get_memory("ent_grace.json"))
+        grace_entity = json.loads(await get_memory("ent_grace.json", tome=None))
         grace_record = json.loads(grace_entity["content"])
         assert grace_record["id"] == "grace"
         assert grace_record["name"] is None
 
         # --- acl round-trips through the stored frontmatter -----------------
-        fetched = json.loads(await get_memory(memory_key))
+        fetched = json.loads(await get_memory(memory_key, tome=None))
         metadata, _ = _parse_frontmatter(fetched["content"])
         assert metadata["acl"] == ["GM"]
     finally:
-        await forget(memory_key)
-        await forget("ent_david.json")
-        await forget("ent_tea.json")
-        await forget("ent_grace.json")
+        await forget(memory_key, tome=None)
+        await forget("ent_david.json", tome=None)
+        await forget("ent_tea.json", tome=None)
+        await forget("ent_grace.json", tome=None)
 
 
 async def _supersede_relationship(backend: Backend) -> None:
@@ -519,12 +531,13 @@ async def _supersede_relationship(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     memory_key = result["key"]
 
     try:
-        original = json.loads(await get_memory(memory_key))
+        original = json.loads(await get_memory(memory_key, tome=None))
         original_metadata, original_body = _parse_frontmatter(original["content"])
 
         # --- superseding one relationship leaves the other, and the content, alone ---
@@ -534,9 +547,10 @@ async def _supersede_relationship(backend: Backend) -> None:
             predicate="likes",
             objectEntityId="tea",
             superseded_by="mem_correction.md",
+            tome=None,
         )
 
-        patched = json.loads(await get_memory(memory_key))
+        patched = json.loads(await get_memory(memory_key, tome=None))
         metadata, body = _parse_frontmatter(patched["content"])
 
         relationships = {(r["subjectEntityId"], r["objectEntityId"]): r for r in metadata["relationships"]}
@@ -553,8 +567,9 @@ async def _supersede_relationship(backend: Backend) -> None:
             predicate="likes",
             objectEntityId="tea",
             superseded_by=None,
+            tome=None,
         )
-        cleared = json.loads(await get_memory(memory_key))
+        cleared = json.loads(await get_memory(memory_key, tome=None))
         cleared_metadata, _ = _parse_frontmatter(cleared["content"])
         cleared_relationships = {(r["subjectEntityId"], r["objectEntityId"]): r for r in cleared_metadata["relationships"]}
         assert cleared_relationships[("david", "tea")]["superseded_by"] is None
@@ -567,6 +582,7 @@ async def _supersede_relationship(backend: Backend) -> None:
                 predicate="dislikes",
                 objectEntityId="tea",
                 superseded_by="mem_correction.md",
+                tome=None,
             )
 
         # --- a memory key that doesn't exist is an error -------------------------
@@ -577,12 +593,13 @@ async def _supersede_relationship(backend: Backend) -> None:
                 predicate="likes",
                 objectEntityId="tea",
                 superseded_by="mem_correction.md",
+                tome=None,
             )
     finally:
-        await forget(memory_key)
-        await forget("ent_david.json")
-        await forget("ent_tea.json")
-        await forget("ent_coffee.json")
+        await forget(memory_key, tome=None)
+        await forget("ent_david.json", tome=None)
+        await forget("ent_tea.json", tome=None)
+        await forget("ent_coffee.json", tome=None)
 
 
 async def _recall_as_acl_scope(backend: Backend) -> None:
@@ -605,6 +622,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     membership_key = membership["key"]
@@ -617,6 +635,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     party_memory = json.loads(
@@ -627,6 +646,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=["Party A"],
             derived_from=None,
+            tome=None,
         )
     )
     gm_memory = json.loads(
@@ -637,6 +657,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=["GM"],
             derived_from=None,
+            tome=None,
         )
     )
     open_key, party_key, gm_key = open_memory["key"], party_memory["key"], gm_memory["key"]
@@ -644,7 +665,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
     try:
         # --- member_of, special-cased from the relationship, merges onto the ---
         # --- entity record without introducing a new primitive -----------------
-        alice_entity = json.loads(await get_memory("ent_alice.json"))
+        alice_entity = json.loads(await get_memory("ent_alice.json", tome=None))
         alice_record = json.loads(alice_entity["content"])
         assert alice_record["member_of"] == ["Party A"]
 
@@ -689,8 +710,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
         assert {open_key, party_key, gm_key} <= unscoped
     finally:
         for key in (membership_key, open_key, party_key, gm_key):
-            await forget(key)
-        await forget("ent_alice.json")
+            await forget(key, tome=None)
+        await forget("ent_alice.json", tome=None)
 
 
 async def _facet_recall(backend: Backend) -> None:
@@ -704,6 +725,7 @@ async def _facet_recall(backend: Backend) -> None:
             memory_type="event",
             acl=None,
             derived_from=None,
+            tome=None,
         )
     )
     root_key = root["key"]
@@ -716,17 +738,18 @@ async def _facet_recall(backend: Backend) -> None:
             memory_type="event",
             acl=["GM"],
             derived_from=root_key,
+            tome=None,
         )
     )
     facet_key = facet["key"]
 
     try:
         # --- derived_from round-trips through the stored frontmatter -----------
-        fetched_facet = json.loads(await get_memory(facet_key))
+        fetched_facet = json.loads(await get_memory(facet_key, tome=None))
         facet_metadata, _ = _parse_frontmatter(fetched_facet["content"])
         assert facet_metadata["derived_from"] == root_key
 
-        fetched_root = json.loads(await get_memory(root_key))
+        fetched_root = json.loads(await get_memory(root_key, tome=None))
         root_metadata, _ = _parse_frontmatter(fetched_root["content"])
         assert root_metadata["derived_from"] is None
 
@@ -772,5 +795,51 @@ async def _facet_recall(backend: Backend) -> None:
         assert root_key in party_keys
         assert facet_key not in party_keys
     finally:
-        await forget(root_key)
-        await forget(facet_key)
+        await forget(root_key, tome=None)
+        await forget(facet_key, tome=None)
+
+
+async def _tome_scoping(backend: Backend) -> None:
+    from daybidmcp.server import Entity, Relationship, forget, get_memory, remember
+
+    tome = "west-marches"
+    ada = Entity(id="ada", name="Ada Lovelace")
+
+    result = json.loads(
+        await remember(
+            content="In the West Marches, Ada charts the ruins.",
+            entities=[ada],
+            relationships=[Relationship(subjectEntityId="ada", predicate="member_of", objectEntityId="cartographers")],
+            memory_type="fact",
+            acl=None,
+            derived_from=None,
+            tome=tome,
+        )
+    )
+    memory_key = result["key"]
+
+    try:
+        # --- the memory round-trips when read back under the same tome ------
+        fetched = json.loads(await get_memory(memory_key, tome=tome))
+        assert "West Marches" in fetched["content"]
+
+        # --- the same key resolves to nothing under the default tome --------
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory(memory_key, tome=None)
+
+        # --- or under a different tome ---------------------------------------
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory(memory_key, tome="other-tome")
+
+        # --- entity records written via remember's member_of merge are also -
+        # --- scoped to the tome, not reachable from outside it ---------------
+        ada_entity = json.loads(await get_memory("ent_ada.json", tome=tome))
+        ada_record = json.loads(ada_entity["content"])
+        assert ada_record["member_of"] == ["cartographers"]
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory("ent_ada.json", tome=None)
+    finally:
+        await forget(memory_key, tome=tome)
+        await forget("ent_ada.json", tome=tome)
+        await forget("ent_cartographers.json", tome=tome)

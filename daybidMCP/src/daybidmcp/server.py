@@ -212,6 +212,7 @@ async def request(
     *,
     params: dict[str, str] | None = None,
     files: list[tuple[str, tuple[str, BytesIO, str]]] | dict[str, tuple[str, BytesIO, str]] | None = None,
+    data: dict[str, str] | None = None,
     json_body: dict[str, object] | None = None,
 ) -> httpx.Response:
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
@@ -221,22 +222,26 @@ async def request(
             headers=get_headers(),
             params=params,
             files=files,
+            data=data,
             json=json_body,
         )
         _ = response.raise_for_status()
         return response
 
 
-async def batch_read(keys: list[str]) -> dict[str, str]:
+async def batch_read(keys: list[str], tome: str | None = None) -> dict[str, str]:
     if not keys:
         return {}
 
-    response = await request("POST", "/memory/batch/read", json_body={"keys": keys})
+    body: dict[str, object] = {"keys": keys}
+    if tome is not None:
+        body["tome"] = tome
+    response = await request("POST", "/memory/batch/read", json_body=body)
     payload = response.json()
     return payload.get("contents", {})
 
 
-async def assert_member_of_relationships(relationships: list[Relationship]) -> None:
+async def assert_member_of_relationships(relationships: list[Relationship], tome: str | None = None) -> None:
     """Merge each member_of relationship onto its subject entity's member_of
     list via the Go backend's shared /entity/relationship endpoint, rather
     than re-deriving that merge (dedupe-and-append) in Python - see issue #51.
@@ -250,22 +255,27 @@ async def assert_member_of_relationships(relationships: list[Relationship]) -> N
     for relationship in relationships:
         if relationship.predicate != MEMBER_OF_PREDICATE or relationship.objectEntityId is None:
             continue
-        _ = await request(
-            "POST",
-            "/entity/relationship",
-            json_body={
-                "subjectEntityId": relationship.subjectEntityId,
-                "predicate": relationship.predicate,
-                "objectEntityId": relationship.objectEntityId,
-                "kind": relationship.kind,
-            },
-        )
+        body: dict[str, object] = {
+            "subjectEntityId": relationship.subjectEntityId,
+            "predicate": relationship.predicate,
+            "objectEntityId": relationship.objectEntityId,
+            "kind": relationship.kind,
+        }
+        if tome is not None:
+            body["tome"] = tome
+        _ = await request("POST", "/entity/relationship", json_body=body)
 
 
 @mcp.tool()
-async def get_memory(key: str) -> str:
+async def get_memory(
+    key: str,
+    tome: str | None = Field(default=None, description="The tome id this memory or entity record is scoped to. Must match the tome (or lack of one) it was written with, or the lookup won't resolve. Omit for the default tome."),
+) -> str:
     """Fetch a stored memory document or entity record by key and return the backend JSON response."""
-    response = await request("GET", "/memory/", params={"key": key})
+    params: dict[str, str] = {"key": key}
+    if tome is not None:
+        params["tome"] = tome
+    response = await request("GET", "/memory/", params=params)
     return response.text
 
 
@@ -277,6 +287,7 @@ async def remember(
     memory_type: MemoryType = Field(default=DEFAULT_MEMORY_TYPE, description="The kind of memory: 'note' for a freeform observation, 'fact' for a durable statement of fact, 'preference' for how the user wants things done, or 'event' for something that happened at a point in time."),
     acl: list[str] | None = Field(default=None, description="Access-control list (entity/group ids) restricting who can access this memory. Omit to apply this Connectome instance's configured default ACL policy (unrestricted if the instance has none configured)."),
     derived_from: str | None = Field(default=None, description="The id of another memory (e.g. 'mem_abc.md') this one is a facet of. A facet is an ordinary memory - stored, chunked, embedded, and ACL-filtered exactly like any other - that happens to record one entity's own version of the root memory's content. Use derived_from when the facet's *content* diverges from the root (a character's private take on a shared event, a rumor vs. the settled fact); if the audience is merely narrower but the content agrees with the root, just tighten the root memory's own acl instead of creating a facet."),
+    tome: str | None = Field(default=None, description="Scope this memory and its entity records to this tome id, storing them in their own namespace. Omit to use the default tome."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -300,10 +311,10 @@ async def remember(
     # Merge member_of onto its subject entity record via the shared backend
     # endpoint before reading entities below, so existing_member_of already
     # reflects this memory's member_of relationships.
-    await assert_member_of_relationships(memory_relationships)
+    await assert_member_of_relationships(memory_relationships, tome)
 
     entity_keys = [f"ent_{entity.id}.json" for entity in memory_entities]
-    existing_entity_contents = await batch_read(entity_keys)
+    existing_entity_contents = await batch_read(entity_keys, tome)
 
     files: list[tuple[str, tuple[str, BytesIO, str]]] = [
         ("file", (memory_id, BytesIO(memory.encode("utf-8")), "text/plain; charset=utf-8"))
@@ -337,6 +348,7 @@ async def remember(
         "POST",
         "/memory/batch",
         files=files,
+        data={"tome": tome} if tome is not None else None,
     )
     return json.dumps(
         {
@@ -355,19 +367,19 @@ async def supersede_relationship(
     predicate: str = Field(description="The predicate of the relationship to patch."),
     objectEntityId: str | None = Field(default=None, description="The objectEntityId of the relationship to patch. Must match exactly, including null for a relationship with no object."),
     superseded_by: str | None = Field(default=None, description="The id of the memory that supersedes/corrects this relationship claim. Pass null to clear a prior supersession and mark the relationship current again."),
+    tome: str | None = Field(default=None, description="The tome id memory_id is scoped to. Must match the tome it was written with. Omit for the default tome."),
 ) -> str:
     """Set (or clear) superseded_by on one relationship entry of an existing memory, in place, without touching its content or triggering re-embedding, and return the backend JSON response."""
-    response = await request(
-        "PATCH",
-        "/memory/relationship",
-        json_body={
-            "key": memory_id,
-            "subjectEntityId": subjectEntityId,
-            "predicate": predicate,
-            "objectEntityId": objectEntityId,
-            "superseded_by": superseded_by,
-        },
-    )
+    body: dict[str, object] = {
+        "key": memory_id,
+        "subjectEntityId": subjectEntityId,
+        "predicate": predicate,
+        "objectEntityId": objectEntityId,
+        "superseded_by": superseded_by,
+    }
+    if tome is not None:
+        body["tome"] = tome
+    response = await request("PATCH", "/memory/relationship", json_body=body)
     return response.text
 
 
@@ -420,9 +432,15 @@ async def browse_all() -> str:
 
 
 @mcp.tool()
-async def forget(key: str) -> str:
+async def forget(
+    key: str,
+    tome: str | None = Field(default=None, description="The tome id this memory or entity record is scoped to. Must match the tome it was written with, or the delete won't resolve. Omit for the default tome."),
+) -> str:
     """Delete a stored memory or entity record by key and return JSON confirming the deletion."""
-    _ = await request("DELETE", "/memory/", json_body={"key": key})
+    body: dict[str, object] = {"key": key}
+    if tome is not None:
+        body["tome"] = tome
+    _ = await request("DELETE", "/memory/", json_body=body)
     return json.dumps({"message": "deleted", "key": key})
 
 

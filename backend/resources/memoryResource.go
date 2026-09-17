@@ -53,10 +53,12 @@ type BatchReadError struct {
 
 type BatchReadRequest struct {
 	Keys []string `json:"keys"`
+	Tome string   `json:"tome"`
 }
 
 type DeleteMemoryRequest struct {
-	Key string `json:"key"`
+	Key  string `json:"key"`
+	Tome string `json:"tome"`
 }
 
 // SupersedeRelationshipRequest identifies one relationship entry on an
@@ -66,6 +68,7 @@ type DeleteMemoryRequest struct {
 // supersession" respectively.
 type SupersedeRelationshipRequest struct {
 	Key             string  `json:"key"`
+	Tome            string  `json:"tome"`
 	SubjectEntityID string  `json:"subjectEntityId"`
 	Predicate       string  `json:"predicate"`
 	ObjectEntityID  *string `json:"objectEntityId"`
@@ -115,7 +118,7 @@ func (resource *MemoryResourceImpl) read(c *gin.Context) {
 		return
 	}
 
-	content, err := resource.manager.GetObject(TomeScopedKey(DefaultTome, key))
+	content, err := resource.manager.GetObject(TomeScopedKey(c.Query("tome"), key))
 	if err != nil {
 		if errors.Is(err, managers.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", key)})
@@ -150,7 +153,7 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 		go func(key string) {
 			defer wg.Done()
 
-			content, err := resource.manager.GetObject(TomeScopedKey(DefaultTome, key))
+			content, err := resource.manager.GetObject(TomeScopedKey(request.Tome, key))
 			if err != nil {
 				errCh <- BatchReadError{Key: key, Error: fmt.Sprintf("read %s: %v", key, err)}
 				return
@@ -189,7 +192,7 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 // Content with no valid memory frontmatter (e.g. an ent_*.json entity
 // record) is left unindexed. It is also the entry point cmd/reindex uses to
 // rebuild the embeddings table from the blob store.
-func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, content string) error {
+func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, content, tome string) error {
 	fm, body, ok := ParseMemoryDocument(content)
 	if !ok {
 		return nil
@@ -214,7 +217,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 			Type:       fm.Type,
 			EntityIDs:  fm.Entities,
 			ACL:        acl,
-			TomeID:     DefaultTome,
+			TomeID:     tome,
 			CreatedAt:  createdAt,
 		}
 	}
@@ -249,14 +252,15 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 		return
 	}
 
-	scopedKey := TomeScopedKey(DefaultTome, fileHeader.Filename)
+	tome := c.PostForm("tome")
+	scopedKey := TomeScopedKey(tome, fileHeader.Filename)
 
 	if err := resource.manager.PutObject(scopedKey, file); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content)); err != nil {
+	if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content), tome); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -276,6 +280,8 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "no files provided"})
 		return
 	}
+
+	tome := c.PostForm("tome")
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(fileHeaders))
@@ -302,14 +308,14 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 				return
 			}
 
-			scopedKey := TomeScopedKey(DefaultTome, fileHeader.Filename)
+			scopedKey := TomeScopedKey(tome, fileHeader.Filename)
 
 			if err := resource.manager.PutObject(scopedKey, file); err != nil {
 				errCh <- fmt.Errorf("upload %s: %w", fileHeader.Filename, err)
 				return
 			}
 
-			if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content)); err != nil {
+			if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content), tome); err != nil {
 				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)
@@ -360,7 +366,7 @@ func (resource *MemoryResourceImpl) supersedeRelationship(c *gin.Context) {
 		return
 	}
 
-	scopedKey := TomeScopedKey(DefaultTome, req.Key)
+	scopedKey := TomeScopedKey(req.Tome, req.Key)
 
 	content, err := resource.manager.GetObject(scopedKey)
 	if err != nil {
@@ -396,7 +402,7 @@ func (resource *MemoryResourceImpl) delete(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	scopedKey := TomeScopedKey(DefaultTome, body.Key)
+	scopedKey := TomeScopedKey(body.Tome, body.Key)
 
 	if err := resource.manager.DeleteObject(scopedKey); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})

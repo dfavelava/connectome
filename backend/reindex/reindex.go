@@ -79,7 +79,10 @@ func Run(ctx context.Context, manager managers.MemoryManager, embedder resources
 			continue
 		}
 
-		if err := memoryResource.IndexMemory(ctx, item.Key, content); err != nil {
+		// item.Key isn't parsed back into a tome id yet (that's prefix-scoped
+		// listing's job - see issue #67), so reindex only ever rebuilds rows
+		// for the default tome for now.
+		if err := memoryResource.IndexMemory(ctx, item.Key, content, resources.DefaultTome); err != nil {
 			log.Printf("reindex: index %s: %v", item.Key, err)
 			result.Failed++
 			continue
