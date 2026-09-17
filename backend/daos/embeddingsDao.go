@@ -84,6 +84,14 @@ func (dao *EmbeddingsDao) DeleteEmbeddingsForKey(ctx context.Context, memoryKey 
 	return nil
 }
 
+// DeleteEmbeddingsForTome removes every embedding row stored under tomeID.
+func (dao *EmbeddingsDao) DeleteEmbeddingsForTome(ctx context.Context, tomeID string) error {
+	if _, err := dao.pool.Exec(ctx, `DELETE FROM embeddings WHERE tome_id = $1`, tomeID); err != nil {
+		return fmt.Errorf("delete embeddings for tome %s: %w", tomeID, err)
+	}
+	return nil
+}
+
 // TruncateEmbeddings removes every row from the embeddings table. Used by
 // cmd/reindex to rebuild the index from scratch, so a rebuild is never left
 // holding both old and re-derived rows for the same key.
