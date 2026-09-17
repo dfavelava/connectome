@@ -29,6 +29,40 @@ func TomeScopedKey(tome, key string) string {
 	return tomeKeyPrefix + tome + "/" + key
 }
 
+// tomeListPrefix returns the blob key prefix that scopes ListObjects to
+// tome: empty for the default tome (ListObjects("") lists every tome's
+// keys, so this alone isn't exclusive - see ListTome), or tomes/<tome>/
+// otherwise, which is exact.
+func tomeListPrefix(tome string) string {
+	if tome == DefaultTome {
+		return ""
+	}
+	return tomeKeyPrefix + tome + "/"
+}
+
+// ListTome lists manager's objects scoped to tome: exactly the ones under
+// tomes/<tome>/ for a non-default tome, or every object that ISN'T under any
+// tomes/ prefix for the default tome. The default case needs the extra
+// filter because ListObjects("") returns every tome's keys, not just the
+// unprefixed ones TomeScopedKey uses for DefaultTome.
+func ListTome(manager managers.MemoryManager, tome string) (*managers.MemoryListResult, error) {
+	result, err := manager.ListObjects(tomeListPrefix(tome))
+	if err != nil {
+		return nil, err
+	}
+	if tome != DefaultTome {
+		return result, nil
+	}
+
+	contents := make([]managers.MemoryListItem, 0, len(result.Contents))
+	for _, item := range result.Contents {
+		if !strings.HasPrefix(item.Key, tomeKeyPrefix) {
+			contents = append(contents, item)
+		}
+	}
+	return &managers.MemoryListResult{Contents: contents}, nil
+}
+
 // tomeTestConventionPrefixes are the tome id prefixes DestroyTome treats as
 // obviously disposable, safe to destroy without a caller passing confirm.
 var tomeTestConventionPrefixes = []string{"temp-", "test-"}

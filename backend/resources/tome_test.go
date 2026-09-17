@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"mime/multipart"
+	"strings"
 	"testing"
 
 	"daybid-dev-service/managers"
@@ -63,7 +64,7 @@ type fakeTomeManager struct {
 func (f *fakeTomeManager) GetObject(string) (string, error)       { return "", nil }
 func (f *fakeTomeManager) PutObject(string, multipart.File) error { return nil }
 func (f *fakeTomeManager) DeleteObject(string) error              { return nil }
-func (f *fakeTomeManager) ListObjects() (*managers.MemoryListResult, error) {
+func (f *fakeTomeManager) ListObjects(string) (*managers.MemoryListResult, error) {
 	return &managers.MemoryListResult{}, nil
 }
 func (f *fakeTomeManager) DeleteObjectsWithPrefix(prefix string) error {
@@ -135,5 +136,68 @@ func TestDestroyTomeAllowsNonConventionTomeWithConfirm(t *testing.T) {
 	}
 	if len(manager.deletedPrefixes) != 1 || manager.deletedPrefixes[0] != "tomes/west-marches/" {
 		t.Fatalf("expected blobs deleted under tomes/west-marches/, got %v", manager.deletedPrefixes)
+	}
+}
+
+// fakeListManager is a minimal managers.MemoryManager stand-in whose
+// ListObjects filters a fixed key set by raw string prefix, the same way
+// S3's ListObjectsV2 and localFsManager's ListObjects both behave - so
+// ListTome's own filtering can be tested without a real backing store.
+type fakeListManager struct {
+	keys []string
+}
+
+func (f *fakeListManager) GetObject(string) (string, error)       { return "", nil }
+func (f *fakeListManager) PutObject(string, multipart.File) error { return nil }
+func (f *fakeListManager) DeleteObject(string) error              { return nil }
+func (f *fakeListManager) DeleteObjectsWithPrefix(string) error   { return nil }
+func (f *fakeListManager) ListObjects(prefix string) (*managers.MemoryListResult, error) {
+	contents := []managers.MemoryListItem{}
+	for _, key := range f.keys {
+		if strings.HasPrefix(key, prefix) {
+			contents = append(contents, managers.MemoryListItem{Key: key})
+		}
+	}
+	return &managers.MemoryListResult{Contents: contents}, nil
+}
+
+func TestListTomeScopesToTomePrefix(t *testing.T) {
+	manager := &fakeListManager{keys: []string{
+		"mem_a.md",
+		"ent_ada.json",
+		"tomes/west-marches/mem_b.md",
+		"tomes/other-tome/mem_c.md",
+	}}
+
+	result, err := ListTome(manager, "west-marches")
+	if err != nil {
+		t.Fatalf("ListTome: %v", err)
+	}
+
+	if len(result.Contents) != 1 || result.Contents[0].Key != "tomes/west-marches/mem_b.md" {
+		t.Fatalf("expected only tomes/west-marches/mem_b.md, got %+v", result.Contents)
+	}
+}
+
+func TestListTomeDefaultTomeExcludesOtherTomesKeys(t *testing.T) {
+	manager := &fakeListManager{keys: []string{
+		"mem_a.md",
+		"ent_ada.json",
+		"tomes/west-marches/mem_b.md",
+		"tomes/other-tome/mem_c.md",
+	}}
+
+	result, err := ListTome(manager, DefaultTome)
+	if err != nil {
+		t.Fatalf("ListTome: %v", err)
+	}
+
+	got := make(map[string]bool, len(result.Contents))
+	for _, item := range result.Contents {
+		got[item.Key] = true
+	}
+
+	if len(got) != 2 || !got["mem_a.md"] || !got["ent_ada.json"] {
+		t.Fatalf("expected only the default tome's unprefixed keys, got %+v", result.Contents)
 	}
 }

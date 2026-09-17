@@ -34,7 +34,7 @@ func (m *fakeManager) PutObject(string, multipart.File) error { return nil }
 func (m *fakeManager) DeleteObject(string) error              { return nil }
 func (m *fakeManager) DeleteObjectsWithPrefix(string) error   { return nil }
 
-func (m *fakeManager) ListObjects() (*managers.MemoryListResult, error) {
+func (m *fakeManager) ListObjects(string) (*managers.MemoryListResult, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
