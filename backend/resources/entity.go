@@ -35,11 +35,11 @@ type EntityWithMemories struct {
 	MemberOf  []string       `json:"member_of"`
 }
 
-// entityKey returns the blob store key for an entity id, matching the
-// ent_<id>.json convention daybidmcp's remember writes entity records under,
-// scoped to DefaultTome until a caller can select another one.
-func entityKey(id string) string {
-	return TomeScopedKey(DefaultTome, "ent_"+id+".json")
+// entityKey returns the blob store key for an entity id under tome, matching
+// the ent_<id>.json convention daybidmcp's remember writes entity records
+// under.
+func entityKey(tome, id string) string {
+	return TomeScopedKey(tome, "ent_"+id+".json")
 }
 
 // resolveACLScope returns the set of entity/group ids whose presence in a
@@ -53,7 +53,9 @@ func entityKey(id string) string {
 func (resource *SearchResourceImpl) resolveACLScope(as string) []string {
 	scope := []string{as}
 
-	content, err := resource.manager.GetObject(entityKey(as))
+	// Search/recall isn't tome-aware yet (see issue #64), so this always
+	// resolves against the default tome for now.
+	content, err := resource.manager.GetObject(entityKey(DefaultTome, as))
 	if err != nil {
 		return scope
 	}
@@ -76,8 +78,8 @@ func (resource *SearchResourceImpl) resolveACLScope(as string) []string {
 // stub_entities_for_relationships's Entity(id=entity_id)) rather than an
 // error, since "no record yet" is the expected state for an id only ever
 // seen as a relationship endpoint so far.
-func readEntity(manager managers.MemoryManager, id string) (EntityWithMemories, bool, error) {
-	content, err := manager.GetObject(entityKey(id))
+func readEntity(manager managers.MemoryManager, tome, id string) (EntityWithMemories, bool, error) {
+	content, err := manager.GetObject(entityKey(tome, id))
 	if err != nil {
 		if errors.Is(err, managers.ErrNotFound) {
 			return EntityWithMemories{ID: id}, false, nil
@@ -87,18 +89,18 @@ func readEntity(manager managers.MemoryManager, id string) (EntityWithMemories, 
 
 	var entity EntityWithMemories
 	if err := json.Unmarshal([]byte(content), &entity); err != nil {
-		return EntityWithMemories{}, false, fmt.Errorf("parse entity record %s: %w", entityKey(id), err)
+		return EntityWithMemories{}, false, fmt.Errorf("parse entity record %s: %w", entityKey(tome, id), err)
 	}
 	entity.ID = id
 	return entity, true, nil
 }
 
-func writeEntity(manager managers.MemoryManager, entity EntityWithMemories) error {
+func writeEntity(manager managers.MemoryManager, tome string, entity EntityWithMemories) error {
 	content, err := json.MarshalIndent(entity, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal entity record %s: %w", entityKey(entity.ID), err)
+		return fmt.Errorf("marshal entity record %s: %w", entityKey(tome, entity.ID), err)
 	}
-	return manager.PutObject(entityKey(entity.ID), newMemoryFile(content))
+	return manager.PutObject(entityKey(tome, entity.ID), newMemoryFile(content))
 }
 
 // mergeMemberOf appends any group ids not already present, preserving order
@@ -157,8 +159,8 @@ func mergeMeta(existing, new map[string]any) map[string]any {
 //
 // A record is only written back when it's new or something about it
 // actually changed; an already-existing, untouched entity is left alone.
-func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predicate string, objectID *string, subjectKind *string, subjectMeta map[string]any) (subject EntityWithMemories, object *EntityWithMemories, err error) {
-	subject, subjectExisted, err := readEntity(manager, subjectID)
+func UpsertEntityRelationship(manager managers.MemoryManager, tome, subjectID, predicate string, objectID *string, subjectKind *string, subjectMeta map[string]any) (subject EntityWithMemories, object *EntityWithMemories, err error) {
+	subject, subjectExisted, err := readEntity(manager, tome, subjectID)
 	if err != nil {
 		return EntityWithMemories{}, nil, fmt.Errorf("read subject entity: %w", err)
 	}
@@ -188,7 +190,7 @@ func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predica
 	}
 
 	if subjectChanged {
-		if err := writeEntity(manager, subject); err != nil {
+		if err := writeEntity(manager, tome, subject); err != nil {
 			return EntityWithMemories{}, nil, fmt.Errorf("write subject entity: %w", err)
 		}
 	}
@@ -197,12 +199,12 @@ func UpsertEntityRelationship(manager managers.MemoryManager, subjectID, predica
 		return subject, nil, nil
 	}
 
-	objectEntity, objectExisted, err := readEntity(manager, *objectID)
+	objectEntity, objectExisted, err := readEntity(manager, tome, *objectID)
 	if err != nil {
 		return EntityWithMemories{}, nil, fmt.Errorf("read object entity: %w", err)
 	}
 	if !objectExisted {
-		if err := writeEntity(manager, objectEntity); err != nil {
+		if err := writeEntity(manager, tome, objectEntity); err != nil {
 			return EntityWithMemories{}, nil, fmt.Errorf("write object entity: %w", err)
 		}
 	}

@@ -159,6 +159,10 @@ def test_facet_recalls_correctly_for_its_own_audience_alongside_root(backend: Ba
     asyncio.run(_facet_recall(backend))
 
 
+def test_tome_scopes_remember_get_memory_forget_and_entity_records(backend: Backend) -> None:
+    asyncio.run(_tome_scoping(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -705,3 +709,49 @@ async def _facet_recall(backend: Backend) -> None:
     finally:
         await forget(root_key)
         await forget(facet_key)
+
+
+async def _tome_scoping(backend: Backend) -> None:
+    from daybidmcp.server import Entity, Relationship, forget, get_memory, remember
+
+    tome = "west-marches"
+    ada = Entity(id="ada", name="Ada Lovelace")
+
+    result = json.loads(
+        await remember(
+            content="In the West Marches, Ada charts the ruins.",
+            entities=[ada],
+            relationships=[Relationship(subjectEntityId="ada", predicate="member_of", objectEntityId="cartographers")],
+            memory_type="fact",
+            acl=None,
+            derived_from=None,
+            tome=tome,
+        )
+    )
+    memory_key = result["key"]
+
+    try:
+        # --- the memory round-trips when read back under the same tome ------
+        fetched = json.loads(await get_memory(memory_key, tome=tome))
+        assert "West Marches" in fetched["content"]
+
+        # --- the same key resolves to nothing under the default tome --------
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory(memory_key)
+
+        # --- or under a different tome ---------------------------------------
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory(memory_key, tome="other-tome")
+
+        # --- entity records written via remember's member_of merge are also -
+        # --- scoped to the tome, not reachable from outside it ---------------
+        ada_entity = json.loads(await get_memory("ent_ada.json", tome=tome))
+        ada_record = json.loads(ada_entity["content"])
+        assert ada_record["member_of"] == ["cartographers"]
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await get_memory("ent_ada.json")
+    finally:
+        await forget(memory_key, tome=tome)
+        await forget("ent_ada.json", tome=tome)
+        await forget("ent_cartographers.json", tome=tome)

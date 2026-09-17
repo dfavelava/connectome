@@ -10,13 +10,13 @@ import (
 func readEntityJSON(t *testing.T, manager managers.MemoryManager, id string) EntityWithMemories {
 	t.Helper()
 
-	content, err := manager.GetObject(entityKey(id))
+	content, err := manager.GetObject(entityKey("", id))
 	if err != nil {
-		t.Fatalf("read %s: %v", entityKey(id), err)
+		t.Fatalf("read %s: %v", entityKey("", id), err)
 	}
 	var entity EntityWithMemories
 	if err := json.Unmarshal([]byte(content), &entity); err != nil {
-		t.Fatalf("unmarshal %s: %v", entityKey(id), err)
+		t.Fatalf("unmarshal %s: %v", entityKey("", id), err)
 	}
 	return entity
 }
@@ -24,7 +24,7 @@ func readEntityJSON(t *testing.T, manager managers.MemoryManager, id string) Ent
 func TestUpsertEntityRelationshipStubsBothEntitiesWhenNeitherExists(t *testing.T) {
 	manager := newLocalManager(t, nil)
 
-	subject, object, err := UpsertEntityRelationship(manager, "alice", "likes", ptr("tea"), nil, nil)
+	subject, object, err := UpsertEntityRelationship(manager, "", "alice", "likes", ptr("tea"), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestUpsertEntityRelationshipStubsBothEntitiesWhenNeitherExists(t *testing.T
 func TestUpsertEntityRelationshipDoesNotStubWithoutObjectEntityID(t *testing.T) {
 	manager := newLocalManager(t, nil)
 
-	subject, object, err := UpsertEntityRelationship(manager, "alice", "is_tired", nil, nil, nil)
+	subject, object, err := UpsertEntityRelationship(manager, "", "alice", "is_tired", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestUpsertEntityRelationshipMergesMemberOfForMemberOfPredicate(t *testing.T
 		"ent_alice.json": `{"id":"alice","name":"Alice","member_of":["Party A"]}`,
 	})
 
-	subject, object, err := UpsertEntityRelationship(manager, "alice", "member_of", ptr("Adventurers"), nil, nil)
+	subject, object, err := UpsertEntityRelationship(manager, "", "alice", "member_of", ptr("Adventurers"), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestUpsertEntityRelationshipDedupesMemberOf(t *testing.T) {
 		"ent_alice.json": `{"id":"alice","member_of":["Party A"]}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "alice", "member_of", ptr("Party A"), nil, nil)
+	subject, _, err := UpsertEntityRelationship(manager, "", "alice", "member_of", ptr("Party A"), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestUpsertEntityRelationshipIgnoresMemberOfForOtherPredicates(t *testing.T)
 		"ent_alice.json": `{"id":"alice","member_of":["Party A"]}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "alice", "likes", ptr("tea"), nil, nil)
+	subject, _, err := UpsertEntityRelationship(manager, "", "alice", "likes", ptr("tea"), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestUpsertEntityRelationshipLeavesExistingObjectRecordUntouched(t *testing.
 		"ent_tea.json": `{"id":"tea","kind":"drink","member_of":["Beverages"]}`,
 	})
 
-	_, object, err := UpsertEntityRelationship(manager, "alice", "likes", ptr("tea"), nil, nil)
+	_, object, err := UpsertEntityRelationship(manager, "", "alice", "likes", ptr("tea"), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestUpsertEntityRelationshipLeavesExistingUnaffectedSubjectUnwritten(t *tes
 		"ent_alice.json": `{"id":"alice","name":"Alice"}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "alice", "likes", nil, nil, nil)
+	subject, _, err := UpsertEntityRelationship(manager, "", "alice", "likes", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestUpsertEntityRelationshipLeavesExistingUnaffectedSubjectUnwritten(t *tes
 func TestUpsertEntityRelationshipSetsSubjectKindAndMetaOnNewEntity(t *testing.T) {
 	manager := newLocalManager(t, nil)
 
-	subject, _, err := UpsertEntityRelationship(manager, "thorin", "member_of", ptr("discord-1-characters"), ptr("character"), map[string]any{"owner": "discord-1"})
+	subject, _, err := UpsertEntityRelationship(manager, "", "thorin", "member_of", ptr("discord-1-characters"), ptr("character"), map[string]any{"owner": "discord-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestUpsertEntityRelationshipOverwritesExistingKindWhenGiven(t *testing.T) {
 		"ent_thorin.json": `{"id":"thorin","kind":"npc"}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "thorin", "likes", nil, ptr("character"), nil)
+	subject, _, err := UpsertEntityRelationship(manager, "", "thorin", "likes", nil, ptr("character"), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestUpsertEntityRelationshipMergesMetaShallowPreservingOtherKeys(t *testing
 		"ent_thorin.json": `{"id":"thorin","meta":{"owner":"discord-1","hp":10}}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "thorin", "likes", nil, nil, map[string]any{"hp": 8})
+	subject, _, err := UpsertEntityRelationship(manager, "", "thorin", "likes", nil, nil, map[string]any{"hp": 8})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestUpsertEntityRelationshipLeavesSubjectUnwrittenWhenKindMetaUnchanged(t *
 		"ent_thorin.json": `{"id":"thorin","kind":"character","meta":{"owner":"discord-1"}}`,
 	})
 
-	subject, _, err := UpsertEntityRelationship(manager, "thorin", "likes", nil, ptr("character"), map[string]any{"owner": "discord-1"})
+	subject, _, err := UpsertEntityRelationship(manager, "", "thorin", "likes", nil, ptr("character"), map[string]any{"owner": "discord-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

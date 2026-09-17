@@ -32,6 +32,7 @@ type EntityRelationshipRequest struct {
 	Kind            string         `json:"kind"`
 	SubjectKind     *string        `json:"subjectKind"`
 	SubjectMeta     map[string]any `json:"subjectMeta"`
+	Tome            string         `json:"tome"`
 }
 
 // EntityRelationshipResponse returns the entity records affected by an
@@ -81,7 +82,7 @@ func (resource *EntityResourceImpl) upsertRelationship(c *gin.Context) {
 		return
 	}
 
-	subject, object, err := UpsertEntityRelationship(resource.manager, req.SubjectEntityID, req.Predicate, req.ObjectEntityID, req.SubjectKind, req.SubjectMeta)
+	subject, object, err := UpsertEntityRelationship(resource.manager, req.Tome, req.SubjectEntityID, req.Predicate, req.ObjectEntityID, req.SubjectKind, req.SubjectMeta)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
