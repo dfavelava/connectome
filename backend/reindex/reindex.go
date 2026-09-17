@@ -46,7 +46,7 @@ func (r Result) String() string {
 // untouched and the embedder is never called; Result reports what a real run
 // would do.
 func Run(ctx context.Context, manager managers.MemoryManager, embedder resources.Embedder, store EmbeddingsStore, dryRun bool) (Result, error) {
-	list, err := manager.ListObjects()
+	list, err := manager.ListObjects("")
 	if err != nil {
 		return Result{}, fmt.Errorf("list objects: %w", err)
 	}
@@ -79,9 +79,9 @@ func Run(ctx context.Context, manager managers.MemoryManager, embedder resources
 			continue
 		}
 
-		// item.Key isn't parsed back into a tome id yet (that's prefix-scoped
-		// listing's job - see issue #67), so reindex only ever rebuilds rows
-		// for the default tome for now.
+		// ListObjects("") above lists every tome's keys, but item.Key isn't
+		// parsed back into a tome id, so reindex only ever rebuilds rows for
+		// the default tome for now.
 		if err := memoryResource.IndexMemory(ctx, item.Key, content, resources.DefaultTome); err != nil {
 			log.Printf("reindex: index %s: %v", item.Key, err)
 			result.Failed++

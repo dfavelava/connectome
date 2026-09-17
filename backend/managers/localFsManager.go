@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const previewLength = 1024
@@ -84,7 +85,10 @@ func (l *LocalFsManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
 	return os.RemoveAll(filepath.Join(l.basePath, prefix))
 }
 
-func (l *LocalFsManagerImpl) ListObjects() (*MemoryListResult, error) {
+// ListObjects lists every object whose key starts with prefix, mirroring
+// S3's raw string-prefix semantics: it walks the whole tree and filters each
+// entry's key, rather than assuming prefix aligns to a directory boundary.
+func (l *LocalFsManagerImpl) ListObjects(prefix string) (*MemoryListResult, error) {
 	contents := []MemoryListItem{}
 
 	err := filepath.WalkDir(l.basePath, func(path string, d fs.DirEntry, err error) error {
@@ -100,12 +104,17 @@ func (l *LocalFsManagerImpl) ListObjects() (*MemoryListResult, error) {
 			return err
 		}
 
-		preview, err := l.GetPreview(filepath.ToSlash(relativePath))
+		key := filepath.ToSlash(relativePath)
+		if !strings.HasPrefix(key, prefix) {
+			return nil
+		}
+
+		preview, err := l.GetPreview(key)
 		if err != nil {
 			return err
 		}
 
-		contents = append(contents, MemoryListItem{Key: filepath.ToSlash(relativePath), Preview: &preview})
+		contents = append(contents, MemoryListItem{Key: key, Preview: &preview})
 		return nil
 	})
 	if err != nil {

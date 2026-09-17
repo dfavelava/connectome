@@ -24,7 +24,7 @@ func TestLocalFsManagerListObjectsIncludesPreview(t *testing.T) {
 	}
 
 	manager := NewLocalFsManager()
-	result, err := manager.ListObjects()
+	result, err := manager.ListObjects("")
 	if err != nil {
 		t.Fatalf("list objects: %v", err)
 	}
@@ -48,6 +48,36 @@ func TestLocalFsManagerListObjectsIncludesPreview(t *testing.T) {
 	}
 	if *item.Preview != expectedPreview {
 		t.Fatalf("unexpected preview length/content: got %d bytes", len(*item.Preview))
+	}
+}
+
+func TestLocalFsManagerListObjectsFiltersByPrefix(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	connectomeDir := filepath.Join(tempHome, ".connectome")
+	scopedDir := filepath.Join(connectomeDir, "tomes", "west-marches")
+	if err := os.MkdirAll(scopedDir, 0o755); err != nil {
+		t.Fatalf("create scoped dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedDir, "mem_a.md"), []byte("scoped"), 0o644); err != nil {
+		t.Fatalf("write scoped file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(connectomeDir, "mem_unscoped.md"), []byte("unscoped"), 0o644); err != nil {
+		t.Fatalf("write unscoped file: %v", err)
+	}
+
+	manager := NewLocalFsManager()
+	result, err := manager.ListObjects("tomes/west-marches/")
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if len(result.Contents) != 1 {
+		t.Fatalf("expected 1 object, got %+v", result.Contents)
+	}
+	if result.Contents[0].Key != "tomes/west-marches/mem_a.md" {
+		t.Fatalf("expected tomes/west-marches/mem_a.md, got %q", result.Contents[0].Key)
 	}
 }
 

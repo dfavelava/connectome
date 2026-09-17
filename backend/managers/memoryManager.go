@@ -15,7 +15,9 @@ type MemoryManager interface {
 	GetObject(key string) (string, error)
 	PutObject(key string, file multipart.File) error
 	DeleteObject(key string) error
-	ListObjects() (*MemoryListResult, error)
+	// ListObjects lists every object whose key starts with prefix. An empty
+	// prefix lists everything.
+	ListObjects(prefix string) (*MemoryListResult, error)
 
 	// DeleteObjectsWithPrefix deletes every object whose key starts with
 	// prefix. Deleting a prefix with no matching objects is not an error.

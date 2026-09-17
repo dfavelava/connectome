@@ -114,21 +114,35 @@ func (manager *S3ManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
 	}
 }
 
-func (manager *S3ManagerImpl) ListObjects() (*MemoryListResult, error) {
-	result, err := manager.client.ListObjects(context.TODO(), &s3.ListObjectsInput{
-		Bucket:    aws.String("daybid-dev"),
-		Delimiter: aws.String("/"),
-	})
-	if err != nil {
-		return nil, err
-	}
+// ListObjects lists every object whose key starts with prefix, paging
+// through ListObjectsV2 (no delimiter, so it recurses into every "directory"
+// - matching DeleteObjectsWithPrefix's traversal) until IsTruncated is
+// false.
+func (manager *S3ManagerImpl) ListObjects(prefix string) (*MemoryListResult, error) {
+	contents := []MemoryListItem{}
 
-	contents := make([]MemoryListItem, 0, len(result.Contents))
-	for _, item := range result.Contents {
-		if item.Key == nil {
-			continue
+	var continuationToken *string
+	for {
+		page, err := manager.client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			Bucket:            aws.String("daybid-dev"),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
 		}
-		contents = append(contents, MemoryListItem{Key: *item.Key})
+
+		for _, item := range page.Contents {
+			if item.Key == nil {
+				continue
+			}
+			contents = append(contents, MemoryListItem{Key: *item.Key})
+		}
+
+		if page.IsTruncated == nil || !*page.IsTruncated {
+			break
+		}
+		continuationToken = page.NextContinuationToken
 	}
 
 	return &MemoryListResult{Contents: contents}, nil

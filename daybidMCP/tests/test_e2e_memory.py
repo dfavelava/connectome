@@ -800,7 +800,7 @@ async def _facet_recall(backend: Backend) -> None:
 
 
 async def _tome_scoping(backend: Backend) -> None:
-    from daybidmcp.server import Entity, Relationship, forget, get_memory, remember
+    from daybidmcp.server import Entity, Relationship, browse_all, forget, get_memory, remember
 
     tome = "west-marches"
     ada = Entity(id="ada", name="Ada Lovelace")
@@ -839,6 +839,18 @@ async def _tome_scoping(backend: Backend) -> None:
 
         with pytest.raises(httpx.HTTPStatusError):
             await get_memory("ent_ada.json", tome=None)
+
+        # --- browse_all lists the tome's own scoped keys, not the raw ones --
+        scoped_key = f"tomes/{tome}/{memory_key}"
+        scoped_keys = {item["key"] for item in json.loads(await browse_all(tome=tome))["keys"]}
+        assert scoped_key in scoped_keys
+        assert f"tomes/{tome}/ent_ada.json" in scoped_keys
+        assert f"tomes/{tome}/ent_cartographers.json" in scoped_keys
+
+        # --- and stays invisible to a browse_all of the default tome --------
+        default_keys = {item["key"] for item in json.loads(await browse_all())["keys"]}
+        assert scoped_key not in default_keys
+        assert memory_key not in default_keys
     finally:
         await forget(memory_key, tome=tome)
         await forget("ent_ada.json", tome=tome)

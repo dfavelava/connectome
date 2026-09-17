@@ -63,7 +63,7 @@ type fakeTomeManager struct {
 func (f *fakeTomeManager) GetObject(string) (string, error)       { return "", nil }
 func (f *fakeTomeManager) PutObject(string, multipart.File) error { return nil }
 func (f *fakeTomeManager) DeleteObject(string) error              { return nil }
-func (f *fakeTomeManager) ListObjects() (*managers.MemoryListResult, error) {
+func (f *fakeTomeManager) ListObjects(string) (*managers.MemoryListResult, error) {
 	return &managers.MemoryListResult{}, nil
 }
 func (f *fakeTomeManager) DeleteObjectsWithPrefix(prefix string) error {

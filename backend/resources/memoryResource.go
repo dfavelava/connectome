@@ -340,7 +340,7 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 }
 
 func (resource *MemoryResourceImpl) list(c *gin.Context) {
-	res, err := resource.manager.ListObjects()
+	res, err := resource.manager.ListObjects(TomeListPrefix(c.Query("tome")))
 
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})

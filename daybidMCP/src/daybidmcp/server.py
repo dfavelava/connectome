@@ -419,9 +419,14 @@ async def recall(
 
 
 @mcp.tool()
-async def browse_all() -> str:
+async def browse_all(
+    tome: str | None = Field(default=None, description="Restrict results to this tome id. Omit for the default tome."),
+) -> str:
     """List all stored memory and entity keys and return them as JSON with optional previews."""
-    response = await request("GET", "/memory/list")
+    params: dict[str, str] = {}
+    if tome is not None:
+        params["tome"] = tome
+    response = await request("GET", "/memory/list", params=params)
     payload = response.json()
     keys = [
         {"key": item["Key"], "preview": item.get("Preview")}

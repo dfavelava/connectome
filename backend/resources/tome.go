@@ -29,6 +29,16 @@ func TomeScopedKey(tome, key string) string {
 	return tomeKeyPrefix + tome + "/" + key
 }
 
+// TomeListPrefix returns the blob key prefix that scopes ListObjects to
+// tome: empty for the default tome (list everything, matching today's
+// unprefixed keys), or tomes/<tome>/ otherwise.
+func TomeListPrefix(tome string) string {
+	if tome == DefaultTome {
+		return ""
+	}
+	return tomeKeyPrefix + tome + "/"
+}
+
 // tomeTestConventionPrefixes are the tome id prefixes DestroyTome treats as
 // obviously disposable, safe to destroy without a caller passing confirm.
 var tomeTestConventionPrefixes = []string{"temp-", "test-"}
