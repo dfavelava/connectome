@@ -72,8 +72,11 @@ async def _remember_recall_supersede(tome: str) -> None:
             tome=tome,
         )
     )["results"]
+    # recall's keys are tome-scoped (tomes/<tome>/mem_x.md), unlike the bare
+    # key remember returns - see test_e2e_memory.py's _tome_scoping test.
+    scoped_key = f"tomes/{tome}/{sighting_key}"
     assert results, "expected recall to surface the seeded memory"
-    assert results[0]["key"] == sighting_key
+    assert results[0]["key"] == scoped_key
     assert "Ashvale" in results[0]["content"]
 
     # --- neither the default tome nor another tome can see into this one ---------
@@ -94,7 +97,7 @@ async def _remember_recall_supersede(tome: str) -> None:
                 )
             )["results"]
         }
-        assert sighting_key not in other_keys
+        assert scoped_key not in other_keys
 
     # --- supersede the located_at claim once the party moves on ------------------
     await supersede_relationship(
