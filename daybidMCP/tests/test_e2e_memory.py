@@ -163,6 +163,10 @@ def test_tome_scopes_remember_get_memory_forget_and_entity_records(backend: Back
     asyncio.run(_tome_scoping(backend))
 
 
+def test_recall_tome_scopes_results_to_the_default_tome(backend: Backend) -> None:
+    asyncio.run(_recall_tome_scope(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -350,7 +354,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
     try:
         # --- plain semantic search surfaces the relevant memory first ------
         results = json.loads(
-            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False, as_=None)
+            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False, as_=None, tome=None)
         )["results"]
         keys = [r["key"] for r in results]
         assert keys, "expected at least one recall result"
@@ -362,7 +366,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         fact_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False, as_=None)
+                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False, as_=None, tome=None)
             )["results"]
         }
         assert tea_key not in fact_keys
@@ -372,7 +376,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         ada_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False, as_=None)
+                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False, as_=None, tome=None)
             )["results"]
         }
         assert ada_key in ada_keys
@@ -380,13 +384,74 @@ async def _recall_roundtrip(backend: Backend) -> None:
 
         # --- hydrate returns the full memory body, not just a snippet ------
         hydrated = json.loads(
-            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True, as_=None)
+            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True, as_=None, tome=None)
         )["results"]
         assert hydrated
         assert "David prefers tea over coffee in the afternoon." in hydrated[0]["content"]
     finally:
         for key in (tea_key, ada_key, grace_key):
             await forget(key)
+
+
+async def _recall_tome_scope(backend: Backend) -> None:
+    from daybidmcp.server import forget, recall, remember
+
+    # remember has no tome parameter yet - see 1.2C - so this memory always
+    # lands in the default tome (tome_id ""), same as everything written
+    # before tomes existed.
+    stored = json.loads(
+        await remember(
+            content="The lighthouse keeper at Ashvale hums an old sea shanty every dawn.",
+            entities=[],
+            relationships=[],
+            memory_type="note",
+            acl=None,
+            derived_from=None,
+        )
+    )
+    memory_key = stored["key"]
+
+    try:
+        # --- omitting tome finds it in the default tome, as before tomes -------
+        # --- existed -------------------------------------------------------
+        default_keys = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="lighthouse keeper humming at dawn",
+                    k=5,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_=None,
+                    tome=None,
+                )
+            )["results"]
+        }
+        assert memory_key in default_keys
+
+        # --- a different tome sees none of the default tome's memories ---------
+        other_tome_keys = {
+            r["key"]
+            for r in json.loads(
+                await recall(
+                    query="lighthouse keeper humming at dawn",
+                    k=5,
+                    memory_type=None,
+                    entity=None,
+                    since=None,
+                    until=None,
+                    hydrate=False,
+                    as_=None,
+                    tome="west-marches",
+                )
+            )["results"]
+        }
+        assert memory_key not in other_tome_keys
+    finally:
+        await forget(memory_key)
 
 
 async def _stub_entities_and_acl(backend: Backend) -> None:
@@ -600,6 +665,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     until=None,
                     hydrate=False,
                     as_="alice",
+                    tome=None,
                 )
             )["results"]
         }
@@ -620,6 +686,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     until=None,
                     hydrate=False,
                     as_=None,
+                    tome=None,
                 )
             )["results"]
         }
@@ -681,6 +748,7 @@ async def _facet_recall(backend: Backend) -> None:
                     until=None,
                     hydrate=False,
                     as_="GM",
+                    tome=None,
                 )
             )["results"]
         }
@@ -701,6 +769,7 @@ async def _facet_recall(backend: Backend) -> None:
                     until=None,
                     hydrate=False,
                     as_="alice",
+                    tome=None,
                 )
             )["results"]
         }

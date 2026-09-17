@@ -315,6 +315,36 @@ func TestSearchAsWithoutEntityRecordScopesToJustThatID(t *testing.T) {
 	}
 }
 
+func TestSearchWithoutTomeFiltersToDefaultTome(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything"}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	if got := index.gotFilters.TomeID; got != DefaultTome {
+		t.Fatalf("expected TomeID %q with no tome filter, got %q", DefaultTome, got)
+	}
+}
+
+func TestSearchWithTomeFilterScopesToThatTome(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything","filters":{"tome":"west-marches"}}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	if got := index.gotFilters.TomeID; got != "west-marches" {
+		t.Fatalf("expected TomeID %q, got %q", "west-marches", got)
+	}
+}
+
 func TestSearchClampsKToMax(t *testing.T) {
 	srv, index := newSearchTestServer(t, nil, nil)
 
