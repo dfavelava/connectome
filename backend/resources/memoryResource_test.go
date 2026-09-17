@@ -58,6 +58,27 @@ func (f *fakeIndexer) DeleteEmbeddingsForKey(_ context.Context, memoryKey string
 	return nil
 }
 
+// DeleteEmbeddingsForTome removes every row whose TomeID matches tomeID,
+// mirroring the real `DELETE FROM embeddings WHERE tome_id = $1`.
+func (f *fakeIndexer) DeleteEmbeddingsForTome(_ context.Context, tomeID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, rows := range f.rows {
+		kept := rows[:0]
+		for _, row := range rows {
+			if row.TomeID != tomeID {
+				kept = append(kept, row)
+			}
+		}
+		if len(kept) == 0 {
+			delete(f.rows, key)
+		} else {
+			f.rows[key] = kept
+		}
+	}
+	return nil
+}
+
 func (f *fakeIndexer) rowsFor(key string) []daos.EmbeddingRow {
 	f.mu.Lock()
 	defer f.mu.Unlock()

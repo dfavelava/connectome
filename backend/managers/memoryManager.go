@@ -16,4 +16,8 @@ type MemoryManager interface {
 	PutObject(key string, file multipart.File) error
 	DeleteObject(key string) error
 	ListObjects() (*MemoryListResult, error)
+
+	// DeleteObjectsWithPrefix deletes every object whose key starts with
+	// prefix. Deleting a prefix with no matching objects is not an error.
+	DeleteObjectsWithPrefix(prefix string) error
 }

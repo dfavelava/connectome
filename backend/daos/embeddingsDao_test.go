@@ -448,6 +448,59 @@ func TestEmbeddingsDaoSearchFiltersByTomeID(t *testing.T) {
 	})
 }
 
+func TestEmbeddingsDaoDeleteEmbeddingsForTomeRemovesOnlyThatTome(t *testing.T) {
+	pool := testPool(t)
+	dao := NewEmbeddingsDao(pool)
+	ctx := context.Background()
+
+	suffix := uuid.NewString()
+	defaultKey := "mem_default_tome_" + suffix + ".md" // tome_id: "" (unset)
+	scopedKey := "mem_scoped_tome_" + suffix + ".md"   // tome_id: "temp-" + suffix
+	tome := "temp-" + suffix
+	t.Cleanup(func() {
+		for _, key := range []string{defaultKey, scopedKey} {
+			_ = dao.DeleteEmbeddingsForKey(context.Background(), key)
+		}
+	})
+
+	now := time.Now().UTC()
+	if err := dao.InsertEmbeddings(ctx, defaultKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert defaultKey: %v", err)
+	}
+	if err := dao.InsertEmbeddings(ctx, scopedKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", TomeID: tome, CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("insert scopedKey: %v", err)
+	}
+
+	if err := dao.DeleteEmbeddingsForTome(ctx, tome); err != nil {
+		t.Fatalf("delete embeddings for tome: %v", err)
+	}
+
+	query := unitVector(768, 0)
+	hits, err := dao.Search(ctx, "", query, 50, SearchFilters{})
+	if err != nil {
+		t.Fatalf("search default tome: %v", err)
+	}
+	for _, h := range hits {
+		if h.MemoryKey == scopedKey {
+			t.Fatalf("expected %s to be gone after destroying tome %s, found %+v", scopedKey, tome, h)
+		}
+	}
+
+	found := false
+	for _, h := range hits {
+		if h.MemoryKey == defaultKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s in the default tome to survive destroying an unrelated tome", defaultKey)
+	}
+}
+
 func TestEmbeddingsDaoTruncateEmbeddingsRemovesAllRows(t *testing.T) {
 	pool := testPool(t)
 	dao := NewEmbeddingsDao(pool)

@@ -77,6 +77,13 @@ func (l *LocalFsManagerImpl) DeleteObject(path string) error {
 	return os.Remove(fullPath)
 }
 
+// DeleteObjectsWithPrefix removes every file under prefix. A tome's blobs
+// all live under one tomes/<id>/ directory, so this is just an
+// os.RemoveAll of that directory - a missing directory is not an error.
+func (l *LocalFsManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
+	return os.RemoveAll(filepath.Join(l.basePath, prefix))
+}
+
 func (l *LocalFsManagerImpl) ListObjects() (*MemoryListResult, error) {
 	contents := []MemoryListItem{}
 

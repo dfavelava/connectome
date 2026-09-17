@@ -51,6 +51,50 @@ func TestLocalFsManagerListObjectsIncludesPreview(t *testing.T) {
 	}
 }
 
+func TestLocalFsManagerDeleteObjectsWithPrefixRemovesOnlyMatchingBlobs(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	connectomeDir := filepath.Join(tempHome, ".connectome")
+	scopedDir := filepath.Join(connectomeDir, "tomes", "temp-scratch")
+	if err := os.MkdirAll(scopedDir, 0o755); err != nil {
+		t.Fatalf("create scoped dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedDir, "mem_a.md"), []byte("scoped"), 0o644); err != nil {
+		t.Fatalf("write scoped file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(connectomeDir, "mem_unscoped.md"), []byte("unscoped"), 0o644); err != nil {
+		t.Fatalf("write unscoped file: %v", err)
+	}
+
+	manager := NewLocalFsManager()
+	if err := manager.DeleteObjectsWithPrefix("tomes/temp-scratch/"); err != nil {
+		t.Fatalf("delete objects with prefix: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(connectomeDir, "tomes", "temp-scratch")); !os.IsNotExist(err) {
+		t.Fatalf("expected scoped directory to be gone, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(connectomeDir, "mem_unscoped.md")); err != nil {
+		t.Fatalf("expected unscoped file to survive: %v", err)
+	}
+}
+
+func TestLocalFsManagerDeleteObjectsWithPrefixIsNoopForMissingPrefix(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	connectomeDir := filepath.Join(tempHome, ".connectome")
+	if err := os.MkdirAll(connectomeDir, 0o755); err != nil {
+		t.Fatalf("create connectome dir: %v", err)
+	}
+
+	manager := NewLocalFsManager()
+	if err := manager.DeleteObjectsWithPrefix("tomes/never-existed/"); err != nil {
+		t.Fatalf("expected no error deleting a never-existed prefix, got %v", err)
+	}
+}
+
 func TestLocalFsManagerGetObjectMissingReturnsErrNotFound(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

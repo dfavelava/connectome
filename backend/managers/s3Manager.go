@@ -70,6 +70,50 @@ func (manager *S3ManagerImpl) DeleteObject(key string) error {
 	return err
 }
 
+// s3DeleteBatchSize is the max number of keys S3's DeleteObjects accepts in
+// a single request.
+const s3DeleteBatchSize = 1000
+
+// DeleteObjectsWithPrefix deletes every object whose key starts with prefix,
+// paging through ListObjectsV2 (no delimiter, so it recurses into every
+// "directory") and batching deletes at s3DeleteBatchSize keys per request.
+func (manager *S3ManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
+	var continuationToken *string
+	for {
+		page, err := manager.client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			Bucket:            aws.String("daybid-dev"),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return err
+		}
+
+		ids := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, item := range page.Contents {
+			if item.Key == nil {
+				continue
+			}
+			ids = append(ids, types.ObjectIdentifier{Key: item.Key})
+		}
+
+		for start := 0; start < len(ids); start += s3DeleteBatchSize {
+			end := min(start+s3DeleteBatchSize, len(ids))
+			if _, err := manager.client.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
+				Bucket: aws.String("daybid-dev"),
+				Delete: &types.Delete{Objects: ids[start:end]},
+			}); err != nil {
+				return err
+			}
+		}
+
+		if page.IsTruncated == nil || !*page.IsTruncated {
+			return nil
+		}
+		continuationToken = page.NextContinuationToken
+	}
+}
+
 func (manager *S3ManagerImpl) ListObjects() (*MemoryListResult, error) {
 	result, err := manager.client.ListObjects(context.TODO(), &s3.ListObjectsInput{
 		Bucket:    aws.String("daybid-dev"),
