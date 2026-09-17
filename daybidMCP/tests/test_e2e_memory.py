@@ -229,7 +229,7 @@ async def _roundtrip(backend: Backend) -> None:
         assert entity_record["memory_ids"] == [memory_key, second_key]
 
         # --- browse_all -----------------------------------------------------
-        listed = json.loads(await browse_all())
+        listed = json.loads(await browse_all(tome=None))
         listed_keys = {item["key"] for item in listed["keys"]}
         assert {memory_key, second_key, "ent_ada.json"} <= listed_keys
 
@@ -242,7 +242,7 @@ async def _roundtrip(backend: Backend) -> None:
         assert deleted == {"message": "deleted", "key": memory_key}
         assert not memory_path.exists(), "memory file still present after forget"
 
-        remaining = {item["key"] for item in json.loads(await browse_all())["keys"]}
+        remaining = {item["key"] for item in json.loads(await browse_all(tome=None))["keys"]}
         assert memory_key not in remaining
         assert second_key in remaining
         assert "ent_ada.json" in remaining
@@ -855,7 +855,7 @@ async def _tome_scoping(backend: Backend) -> None:
         assert f"tomes/{tome}/ent_cartographers.json" in scoped_keys
 
         # --- and stays invisible to a browse_all of the default tome --------
-        default_keys = {item["key"] for item in json.loads(await browse_all())["keys"]}
+        default_keys = {item["key"] for item in json.loads(await browse_all(tome=None))["keys"]}
         assert scoped_key not in default_keys
         assert memory_key not in default_keys
     finally:
