@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: daybidMCP
+        working-directory: connectomeMCP
     # The end-to-end test builds and runs the real Go backend binary, which
     # now connects to Postgres on boot (see backend/managers/postgresManager.go)
     # and, since memoryResource embeds/indexes on every write (Phase 1B), calls
@@ -98,7 +98,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: daybidMCP/uv.lock
+          cache-dependency-glob: connectomeMCP/uv.lock
       - name: Pull the embedding model
         run: |
           curl -sf http://localhost:11434/api/pull -d '{"name": "nomic-embed-text"}'

@@ -13,8 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
 )
 
 // fakeSearchIndex stands in for *daos.EmbeddingsDao in tests: it returns

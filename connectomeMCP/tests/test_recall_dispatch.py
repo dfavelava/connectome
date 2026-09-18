@@ -12,7 +12,7 @@ import asyncio
 
 from mcp.server.mcpserver.utilities.func_metadata import func_metadata
 
-from daybidmcp import server
+from connectomemcp import server
 
 
 def test_recall_dispatch_accepts_as_argument_without_crashing(monkeypatch):

@@ -7,11 +7,11 @@ import (
 	"reflect"
 	"slices"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 // memberOfPredicate mirrors MEMBER_OF_PREDICATE in
-// daybidMCP/src/daybidmcp/server.py: a relationship predicate that, rather
+// connectomeMCP/src/connectomemcp/server.py: a relationship predicate that, rather
 // than just recording the edge, also merges the object entity id onto the
 // subject entity's member_of list.
 const memberOfPredicate = "member_of"
@@ -22,8 +22,8 @@ type entityRecord struct {
 	MemberOf []string `json:"member_of"`
 }
 
-// EntityWithMemories mirrors daybidmcp's EntityWithMemories model as written
-// to ent_<id>.json (see format_entity in daybidMCP/src/daybidmcp/server.py).
+// EntityWithMemories mirrors connectomemcp's EntityWithMemories model as written
+// to ent_<id>.json (see format_entity in connectomeMCP/src/connectomemcp/server.py).
 // Fields round-trip as null rather than being omitted when unset, matching
 // pydantic's model_dump_json(indent=2) default of including every field.
 type EntityWithMemories struct {
@@ -36,7 +36,7 @@ type EntityWithMemories struct {
 }
 
 // entityKey returns the blob store key for an entity id under tome, matching
-// the ent_<id>.json convention daybidmcp's remember writes entity records
+// the ent_<id>.json convention connectomemcp's remember writes entity records
 // under.
 func entityKey(tome, id string) string {
 	return TomeScopedKey(tome, "ent_"+id+".json")
@@ -105,7 +105,7 @@ func writeEntity(manager managers.MemoryManager, tome string, entity EntityWithM
 
 // mergeMemberOf appends any group ids not already present, preserving order
 // and dropping duplicates - mirrors merge_member_of in
-// daybidMCP/src/daybidmcp/server.py.
+// connectomeMCP/src/connectomemcp/server.py.
 func mergeMemberOf(existing, newGroupIDs []string) []string {
 	memberOf := append([]string{}, existing...)
 	for _, groupID := range newGroupIDs {
@@ -117,7 +117,7 @@ func mergeMemberOf(existing, newGroupIDs []string) []string {
 }
 
 // mergeKind overwrites existing with new when new is given, otherwise leaves
-// existing unchanged - mirrors merge_kind in daybidMCP/src/daybidmcp/server.py.
+// existing unchanged - mirrors merge_kind in connectomeMCP/src/connectomemcp/server.py.
 func mergeKind(existing, new *string) *string {
 	if new != nil {
 		return new
@@ -127,7 +127,7 @@ func mergeKind(existing, new *string) *string {
 
 // mergeMeta shallow-merges new over existing, with keys in new overriding
 // same-named keys in existing - mirrors merge_meta in
-// daybidMCP/src/daybidmcp/server.py.
+// connectomeMCP/src/connectomemcp/server.py.
 func mergeMeta(existing, new map[string]any) map[string]any {
 	if existing == nil && new == nil {
 		return nil
@@ -149,11 +149,11 @@ func mergeMeta(existing, new map[string]any) map[string]any {
 // member_of list (mirrors merge_member_of). It lets callers that only assert
 // a relationship, rather than write a full memory document (e.g.
 // discordbot), drive ent_<id>.json into the same state
-// daybidmcp.server.remember would produce.
+// connectomemcp.server.remember would produce.
 //
 // subjectKind/subjectMeta optionally stamp the subject entity's kind/meta
 // fields in the same call (mirrors the Entity.kind/Entity.meta merge that
-// daybidmcp.server.remember applies via merge_kind/merge_meta) - Connectome
+// connectomemcp.server.remember applies via merge_kind/merge_meta) - Connectome
 // itself has no opinion on what values callers use here; it just persists
 // and merges whatever a caller (e.g. discordbot's /add-character) passes.
 //

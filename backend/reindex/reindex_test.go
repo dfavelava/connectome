@@ -6,8 +6,8 @@ import (
 	"mime/multipart"
 	"testing"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
 )
 
 // fakeManager stands in for a MemoryManager backed by a real blob store: its

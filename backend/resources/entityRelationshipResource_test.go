@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 // newEntityTestServer wires just the /entity routes onto a fresh gin engine

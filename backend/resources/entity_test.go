@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 func newLocalManager(t *testing.T, seed map[string]string) managers.MemoryManager {

@@ -99,8 +99,8 @@ def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Backend:
         raise
 
     base_url = f"http://127.0.0.1:{port}/api/connectome"
-    monkeypatch.setenv("DAYBID_API_BASE_URL", base_url)
-    monkeypatch.setenv("DAYBID_API_KEY", API_KEY)
+    monkeypatch.setenv("CONNECTOME_API_BASE_URL", base_url)
+    monkeypatch.setenv("CONNECTOME_API_KEY", API_KEY)
 
     try:
         yield Backend(base_url=base_url, connectome_dir=connectome_dir)
@@ -168,7 +168,7 @@ def test_recall_tome_scopes_results_to_the_default_tome(backend: Backend) -> Non
 
 
 async def _roundtrip(backend: Backend) -> None:
-    from daybidmcp.server import Entity, browse_all, forget, get_memory, remember
+    from connectomemcp.server import Entity, browse_all, forget, get_memory, remember
 
     ada = Entity(id="ada", name="Ada Lovelace")
 
@@ -257,7 +257,7 @@ async def _roundtrip(backend: Backend) -> None:
 
 
 async def _kind_and_meta_merge(backend: Backend) -> None:
-    from daybidmcp.server import Entity, forget, get_memory, remember
+    from connectomemcp.server import Entity, forget, get_memory, remember
 
     cave = Entity(id="cave", kind="location", meta={"status": "rumored"})
 
@@ -312,7 +312,7 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
 
 
 async def _recall_roundtrip(backend: Backend) -> None:
-    from daybidmcp.server import Entity, forget, recall, remember
+    from connectomemcp.server import Entity, forget, recall, remember
 
     ada = Entity(id="ada", name="Ada Lovelace")
     grace = Entity(id="grace", name="Grace Hopper")
@@ -401,7 +401,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
 
 
 async def _recall_tome_scope(backend: Backend) -> None:
-    from daybidmcp.server import forget, recall, remember
+    from connectomemcp.server import forget, recall, remember
 
     # tome=None lands this memory in the default tome (tome_id ""), same as
     # everything written before tomes existed.
@@ -462,7 +462,7 @@ async def _recall_tome_scope(backend: Backend) -> None:
 
 
 async def _stub_entities_and_acl(backend: Backend) -> None:
-    from daybidmcp.server import Entity, Relationship, forget, get_memory, remember
+    from connectomemcp.server import Entity, Relationship, forget, get_memory, remember
 
     david = Entity(id="david", name="David")
 
@@ -509,7 +509,7 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
 
 
 async def _supersede_relationship(backend: Backend) -> None:
-    from daybidmcp.server import (
+    from connectomemcp.server import (
         Entity,
         Relationship,
         forget,
@@ -603,7 +603,7 @@ async def _supersede_relationship(backend: Backend) -> None:
 
 
 async def _recall_as_acl_scope(backend: Backend) -> None:
-    from daybidmcp.server import (
+    from connectomemcp.server import (
         Entity,
         Relationship,
         forget,
@@ -715,7 +715,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
 
 
 async def _facet_recall(backend: Backend) -> None:
-    from daybidmcp.server import forget, get_memory, recall, remember
+    from connectomemcp.server import forget, get_memory, recall, remember
 
     root = json.loads(
         await remember(
@@ -800,7 +800,7 @@ async def _facet_recall(backend: Backend) -> None:
 
 
 async def _tome_scoping(backend: Backend) -> None:
-    from daybidmcp.server import (
+    from connectomemcp.server import (
         Entity,
         Relationship,
         browse_all,

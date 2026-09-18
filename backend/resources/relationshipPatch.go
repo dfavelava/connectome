@@ -14,13 +14,13 @@ import (
 var ErrRelationshipNotFound = errors.New("relationship not found")
 
 // defaultRelationshipKind mirrors DEFAULT_RELATIONSHIP_KIND in
-// daybidMCP/src/daybidmcp/server.py, used to backfill relationships written
+// connectomeMCP/src/connectomemcp/server.py, used to backfill relationships written
 // before the `kind` field existed.
 const defaultRelationshipKind = "fact"
 
-// relationshipDocument mirrors one entry of daybidmcp's Relationship model as
+// relationshipDocument mirrors one entry of connectomemcp's Relationship model as
 // written into memory frontmatter (see format_memory in
-// daybidMCP/src/daybidmcp/server.py). Field order matches the Python
+// connectomeMCP/src/connectomemcp/server.py). Field order matches the Python
 // model_dump so a patched document looks the same as a freshly written one.
 type relationshipDocument struct {
 	SubjectEntityID string  `yaml:"subjectEntityId"`

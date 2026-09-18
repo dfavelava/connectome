@@ -1,6 +1,6 @@
-## daybidMCP
+## connectomeMCP
 
-Python MCP server for the Daybid connectome memory service.
+Python MCP server for the Connectome connectome memory service.
 
 ### Prerequisites
 
@@ -18,23 +18,23 @@ cp .env.example .env
 ```
 
 ```dotenv
-DAYBID_API_BASE_URL=http://localhost:8080/api/connectome
-DAYBID_API_KEY=your-api-key
+CONNECTOME_API_BASE_URL=http://localhost:8080/api/connectome
+CONNECTOME_API_KEY=your-api-key
 ```
 
-Set `DAYBID_API_KEY` to the same value as `apikey` in `backend/.env`.
+Set `CONNECTOME_API_KEY` to the same value as `apikey` in `backend/.env`.
 
-The MCP server loads this file automatically on startup. `DAYBID_API_BASE_URL` defaults to `http://localhost:8080/api/connectome` if omitted.
+The MCP server loads this file automatically on startup. `CONNECTOME_API_BASE_URL` defaults to `http://localhost:8080/api/connectome` if omitted.
 
 The backend mounts every memory route under the `/api/connectome` prefix (`/api` base group + `/connectome` group). See the "API" section of the root [`README.md`](../README.md) for the canonical route list.
 
 ### Run locally
 
-From the `daybidMCP/` directory:
+From the `connectomeMCP/` directory:
 
 ```bash
 uv sync
-uv run daybidmcp
+uv run connectomemcp
 ```
 
 This starts the MCP server over `stdio`.

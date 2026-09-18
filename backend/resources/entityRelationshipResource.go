@@ -6,12 +6,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/managers"
-	"daybid-dev-service/middleware"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/middleware"
 )
 
 // relationshipKinds mirrors RelationshipKind in
-// daybidMCP/src/daybidmcp/server.py.
+// connectomeMCP/src/connectomemcp/server.py.
 var relationshipKinds = []string{"fact", "hypothesis", "rumor"}
 
 // defaultEntityRelationshipKind mirrors DEFAULT_RELATIONSHIP_KIND.
@@ -21,7 +21,7 @@ const defaultEntityRelationshipKind = "fact"
 // entities. Kind carries the same truth-status vocabulary as a memory
 // document's relationship entries (see relationshipDocument in
 // relationshipPatch.go) for shape parity with that model, but - like
-// daybidmcp.server's merge_member_of - this endpoint doesn't gate the
+// connectomemcp.server's merge_member_of - this endpoint doesn't gate the
 // member_of merge on it; it's accepted and validated so a future caller that
 // also wants to persist the relationship claim itself can reuse this same
 // request shape without a breaking change.

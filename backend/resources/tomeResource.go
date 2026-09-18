@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/managers"
-	"daybid-dev-service/middleware"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/middleware"
 )
 
 type TomeResourceImpl struct {

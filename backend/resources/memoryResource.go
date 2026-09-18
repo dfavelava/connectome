@@ -11,12 +11,12 @@ import (
 	"strings"
 	"sync"
 
-	"daybid-dev-service/middleware"
+	"connectome-dev-service/middleware"
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
 )
 
 // memoryChunkWords and memoryChunkOverlapWords size the chunks that get
@@ -187,7 +187,7 @@ func (resource *MemoryResourceImpl) batchRead(c *gin.Context) {
 }
 
 // IndexMemory keeps the embeddings table in sync with one written memory
-// key: it parses the frontmatter written by daybidmcp's format_memory, chunks
+// key: it parses the frontmatter written by connectomemcp's format_memory, chunks
 // the body, embeds each chunk, and supersedes any prior rows for the key.
 // Content with no valid memory frontmatter (e.g. an ent_*.json entity
 // record) is left unindexed. It is also the entry point cmd/reindex uses to

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 func TestTomeScopedKeyReturnsKeyUnchangedForDefaultTome(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 	"fmt"
 	"log"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
-	"daybid-dev-service/reindex"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/reindex"
 
 	"github.com/joho/godotenv"
 )
