@@ -64,7 +64,7 @@ curl -fsS -H "Authorization: Bearer test" \
 Set `MEMORY_MANAGER` in `backend/.env` to one of:
 
 - `local` (default in `backend/.env.example`): stores objects under `$HOME/.connectome`. Needs no AWS credentials, so `docker compose up --build` works out of the box.
-- `s3`: stores objects in the `daybid-dev` S3 bucket. **Requires** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` in the root `.env` or your shell environment; the Compose file passes these through to the backend. The backend will fail to start if `MEMORY_MANAGER=s3` and no credentials are available.
+- `s3`: stores objects in the S3 bucket named by `S3_BUCKET` (set in `backend/.env`). **Requires** `S3_BUCKET`, plus `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` in the root `.env` or your shell environment; the Compose file passes the AWS credentials through to the backend. The backend will fail to start if `MEMORY_MANAGER=s3` and `S3_BUCKET` or credentials are unavailable.
 
 > Note: when `MEMORY_MANAGER` is unset, the backend falls back to `s3`. The provided `backend/.env.example` sets it to `local` explicitly.
 

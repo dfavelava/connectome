@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -15,23 +16,31 @@ import (
 
 type S3ManagerImpl struct {
 	client *s3.Client
+	bucket string
 }
 
-func NewS3Manager(cfg *aws.Config) *S3ManagerImpl {
-	return &S3ManagerImpl{client: s3.NewFromConfig(*cfg)}
+func NewS3Manager(cfg *aws.Config, bucket string) *S3ManagerImpl {
+	return &S3ManagerImpl{client: s3.NewFromConfig(*cfg), bucket: bucket}
 }
 
+// InitS3Manager builds an S3ManagerImpl from the ambient AWS config and the
+// S3_BUCKET env var, failing fast (matching the AWS config-load check below)
+// if the bucket isn't set - there's no sane default bucket to fall back to.
 func InitS3Manager() *S3ManagerImpl {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		log.Fatal(err)
 	}
-	return NewS3Manager(&cfg)
+	bucket := os.Getenv("S3_BUCKET")
+	if bucket == "" {
+		log.Fatal("S3_BUCKET must be set when MEMORY_MANAGER=s3")
+	}
+	return NewS3Manager(&cfg, bucket)
 }
 
 func (manager *S3ManagerImpl) GetObject(key string) (string, error) {
 	result, err := manager.client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String("daybid-dev"),
+		Bucket: aws.String(manager.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -55,7 +64,7 @@ func (manager *S3ManagerImpl) GetObject(key string) (string, error) {
 
 func (manager *S3ManagerImpl) PutObject(key string, file multipart.File) error {
 	_, err := manager.client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: aws.String("daybid-dev"),
+		Bucket: aws.String(manager.bucket),
 		Key:    aws.String(key),
 		Body:   file,
 	})
@@ -64,7 +73,7 @@ func (manager *S3ManagerImpl) PutObject(key string, file multipart.File) error {
 
 func (manager *S3ManagerImpl) DeleteObject(key string) error {
 	_, err := manager.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-		Bucket: aws.String("daybid-dev"),
+		Bucket: aws.String(manager.bucket),
 		Key:    aws.String(key),
 	})
 	return err
@@ -81,7 +90,7 @@ func (manager *S3ManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
 	var continuationToken *string
 	for {
 		page, err := manager.client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket:            aws.String("daybid-dev"),
+			Bucket:            aws.String(manager.bucket),
 			Prefix:            aws.String(prefix),
 			ContinuationToken: continuationToken,
 		})
@@ -100,7 +109,7 @@ func (manager *S3ManagerImpl) DeleteObjectsWithPrefix(prefix string) error {
 		for start := 0; start < len(ids); start += s3DeleteBatchSize {
 			end := min(start+s3DeleteBatchSize, len(ids))
 			if _, err := manager.client.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
-				Bucket: aws.String("daybid-dev"),
+				Bucket: aws.String(manager.bucket),
 				Delete: &types.Delete{Objects: ids[start:end]},
 			}); err != nil {
 				return err
@@ -124,7 +133,7 @@ func (manager *S3ManagerImpl) ListObjects(prefix string) (*MemoryListResult, err
 	var continuationToken *string
 	for {
 		page, err := manager.client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket:            aws.String("daybid-dev"),
+			Bucket:            aws.String(manager.bucket),
 			Prefix:            aws.String(prefix),
 			ContinuationToken: continuationToken,
 		})
