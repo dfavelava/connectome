@@ -196,12 +196,21 @@ uv run pytest
 The end-to-end test builds and runs the Go backend with the local storage
 manager, so it needs the Go toolchain on `PATH` (it is skipped otherwise).
 
+## Python client
+
+`connectomeClient/` is a minimal async HTTP client for the `/api/connectome`
+routes, independent of the MCP server and protocol. Applications that talk to
+Connectome directly over HTTP (rather than via MCP) - a Discord bot, a script,
+another service - depend on this package instead of vendoring their own copy
+of the request/formatting logic. See [`connectomeClient/README.md`](connectomeClient/README.md).
+
 ## Project layout
 
 - `backend/` — Go API, storage managers, authentication, and Ollama integration
 - `connectomeMCP/` — Python MCP server and client-side memory formatting
+- `connectomeClient/` — Python HTTP client library for applications that talk to Connectome directly (not via MCP)
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
 - `.connectome/` — local memory volume used by the local storage manager
 
-Client applications (e.g. a Discord bot) talk to Connectome over its HTTP API
-or the MCP server; they live in their own repos and are not part of this one.
+Application-specific logic built on top of the client (e.g. a Discord bot)
+lives in its own repo and is not part of this one.
