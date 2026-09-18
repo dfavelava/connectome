@@ -61,7 +61,7 @@ def acceptance_backend() -> Iterator[AcceptanceBackend]:
     if go is None:
         pytest.skip("go toolchain not available")
 
-    work_dir = Path(tempfile.mkdtemp(prefix="daybid-acceptance-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="connectome-acceptance-"))
     home = work_dir / "home"
     (home / ".connectome").mkdir(parents=True)
 
@@ -122,7 +122,7 @@ def acceptance_backend() -> Iterator[AcceptanceBackend]:
 
 @pytest.fixture
 def temp_tome(acceptance_backend: AcceptanceBackend, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Points daybidmcp.server at the shared backend and yields a fresh temp-<uuid> tome id.
+    """Points connectomemcp.server at the shared backend and yields a fresh temp-<uuid> tome id.
 
     Destroys the tome (every blob and embeddings row under it) afterward, even
     if the test fails. The temp- prefix matches the test-convention DestroyTome
@@ -130,8 +130,8 @@ def temp_tome(acceptance_backend: AcceptanceBackend, monkeypatch: pytest.MonkeyP
     needs confirm=true and can never reach the default or a real tome like
     "west-marches".
     """
-    monkeypatch.setenv("DAYBID_API_BASE_URL", acceptance_backend.base_url)
-    monkeypatch.setenv("DAYBID_API_KEY", acceptance_backend.api_key)
+    monkeypatch.setenv("CONNECTOME_API_BASE_URL", acceptance_backend.base_url)
+    monkeypatch.setenv("CONNECTOME_API_KEY", acceptance_backend.api_key)
 
     tome = f"temp-{uuid.uuid4()}"
     try:

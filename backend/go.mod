@@ -1,4 +1,4 @@
-module daybid-dev-service
+module connectome-dev-service
 
 go 1.26.4
 

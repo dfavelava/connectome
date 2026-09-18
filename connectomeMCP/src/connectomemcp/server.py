@@ -110,11 +110,11 @@ class Memory(BaseModel):
     metadata: MemoryMetadata
 
 def get_api_base_url() -> str:
-    return os.getenv("DAYBID_API_BASE_URL", DEFAULT_API_BASE_URL).rstrip("/")
+    return os.getenv("CONNECTOME_API_BASE_URL", DEFAULT_API_BASE_URL).rstrip("/")
 
 
 def get_api_key() -> str | None:
-    return os.getenv("DAYBID_API_KEY") or os.getenv("apikey")
+    return os.getenv("CONNECTOME_API_KEY") or os.getenv("apikey")
 
 
 def get_headers() -> dict[str, str]:
@@ -246,7 +246,7 @@ async def assert_member_of_relationships(relationships: list[Relationship], tome
     list via the Go backend's shared /entity/relationship endpoint, rather
     than re-deriving that merge (dedupe-and-append) in Python - see issue #51.
     Keeping one implementation of the merge (backend/resources/entity.go's
-    UpsertEntityRelationship) means daybidmcp and discordbot can't drift.
+    UpsertEntityRelationship) means connectomemcp and discordbot can't drift.
 
     Skips predicates other than member_of and relationships with no
     objectEntityId, mirroring the same special-case the removed

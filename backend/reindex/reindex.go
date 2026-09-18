@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"log"
 
-	"daybid-dev-service/managers"
-	"daybid-dev-service/resources"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/resources"
 )
 
 // EmbeddingsStore is the subset of *daos.EmbeddingsDao that Run needs: the

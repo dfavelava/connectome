@@ -12,7 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 // multipartBodyWithTome is multipartBody plus a "tome" form field, since

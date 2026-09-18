@@ -16,8 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
 )
 
 const testToken = "e2e-test-token"
@@ -451,7 +451,7 @@ func TestMemoryBatchReadRejectsEmptyKeys(t *testing.T) {
 }
 
 // memoryDocument builds a minimal connectome memory document with the
-// frontmatter shape daybidmcp's format_memory writes.
+// frontmatter shape connectomemcp's format_memory writes.
 func memoryDocument(memType, body string, entities []string) string {
 	entitiesYAML := "[]"
 	if len(entities) > 0 {
@@ -534,7 +534,7 @@ func TestMemoryWriteIndexesRewriteSupersedesDeleteRemoves(t *testing.T) {
 
 // memoryDocumentWithRelationships builds a connectome memory document whose
 // frontmatter carries the given raw YAML relationships block, matching the
-// shape daybidmcp's format_memory writes once Relationship gains kind and
+// shape connectomemcp's format_memory writes once Relationship gains kind and
 // superseded_by.
 func memoryDocumentWithRelationships(relationshipsYAML string) string {
 	return "---\n" +

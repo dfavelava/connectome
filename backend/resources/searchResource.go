@@ -9,9 +9,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
-	"daybid-dev-service/middleware"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/middleware"
 )
 
 const (

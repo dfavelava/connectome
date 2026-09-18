@@ -18,7 +18,7 @@ Connectome is a memory service with a Go HTTP backend and an optional Python MCP
    cp backend/.env.example backend/.env
    ```
 
-2. Set `apikey` in `backend/.env`. Keep the same value available to MCP clients as `DAYBID_API_KEY`.
+2. Set `apikey` in `backend/.env`. Keep the same value available to MCP clients as `CONNECTOME_API_KEY`.
 
 3. Start the backend and Ollama:
 
@@ -157,25 +157,25 @@ Blend weights are configurable via `backend/.env` (see `backend/.env.example`):
 
 ## MCP server
 
-The MCP server exposes Daybid memory operations over stdio. Configure `daybidMCP/.env`:
+The MCP server exposes Connectome memory operations over stdio. Configure `connectomeMCP/.env`:
 
 ```bash
-cp daybidMCP/.env.example daybidMCP/.env
+cp connectomeMCP/.env.example connectomeMCP/.env
 ```
 
 ```dotenv
-DAYBID_API_BASE_URL=http://localhost:8080/api/connectome
-DAYBID_API_KEY=test
+CONNECTOME_API_BASE_URL=http://localhost:8080/api/connectome
+CONNECTOME_API_KEY=test
 ```
 
-Set `DAYBID_API_KEY` to the same value as `apikey` in `backend/.env`.
+Set `CONNECTOME_API_KEY` to the same value as `apikey` in `backend/.env`.
 
 Then run it from the MCP directory:
 
 ```bash
-cd daybidMCP
+cd connectomeMCP
 uv sync
-uv run daybidmcp
+uv run connectomemcp
 ```
 
 To run it with the MCP development inspector (verified on `mcp` 2.1.1 — the
@@ -189,7 +189,7 @@ uv run mcp dev connectome.py
 Run the MCP server tests with:
 
 ```bash
-cd daybidMCP
+cd connectomeMCP
 uv run pytest
 ```
 
@@ -199,7 +199,7 @@ manager, so it needs the Go toolchain on `PATH` (it is skipped otherwise).
 ## Project layout
 
 - `backend/` — Go API, storage managers, authentication, and Ollama integration
-- `daybidMCP/` — Python MCP server and client-side memory formatting
+- `connectomeMCP/` — Python MCP server and client-side memory formatting
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
 - `.connectome/` — local memory volume used by the local storage manager
 

@@ -1,8 +1,8 @@
 package resources
 
 import (
-	"daybid-dev-service/managers"
-	"daybid-dev-service/middleware"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/middleware"
 
 	"github.com/gin-gonic/gin"
 )

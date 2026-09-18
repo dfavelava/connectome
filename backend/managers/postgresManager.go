@@ -15,7 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	pgxvec "github.com/pgvector/pgvector-go/pgx"
 
-	"daybid-dev-service/migrations"
+	"connectome-dev-service/migrations"
 )
 
 type PostgresManager struct {

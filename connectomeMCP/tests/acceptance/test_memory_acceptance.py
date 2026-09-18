@@ -32,7 +32,7 @@ def test_remember_recall_supersede_relationship_in_a_temp_tome(temp_tome: str) -
 
 
 async def _remember_recall_supersede(tome: str) -> None:
-    from daybidmcp.server import (
+    from connectomemcp.server import (
         Entity,
         Relationship,
         get_memory,

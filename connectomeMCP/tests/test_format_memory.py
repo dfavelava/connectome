@@ -2,8 +2,8 @@ import asyncio
 
 import frontmatter
 
-from daybidmcp import server
-from daybidmcp.server import (
+from connectomemcp import server
+from connectomemcp.server import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_RELATIONSHIP_KIND,
     MEMBER_OF_PREDICATE,

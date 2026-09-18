@@ -17,7 +17,7 @@ var validMemoryTypes = map[string]bool{
 }
 
 // memoryFrontmatter is the subset of the connectome memory YAML frontmatter
-// (see daybidMCP/src/daybidmcp/server.py's format_memory) needed to index a
+// (see connectomeMCP/src/connectomemcp/server.py's format_memory) needed to index a
 // memory.
 type memoryFrontmatter struct {
 	Type      string   `yaml:"type"`

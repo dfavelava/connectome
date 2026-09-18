@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 // DefaultTome is the sentinel tome id for "no tome": today's blobs, stored

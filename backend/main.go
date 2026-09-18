@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 
-	"daybid-dev-service/daos"
-	"daybid-dev-service/managers"
-	"daybid-dev-service/resources"
+	"connectome-dev-service/daos"
+	"connectome-dev-service/managers"
+	"connectome-dev-service/resources"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"

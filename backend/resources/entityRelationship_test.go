@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"daybid-dev-service/managers"
+	"connectome-dev-service/managers"
 )
 
 func readEntityJSON(t *testing.T, manager managers.MemoryManager, id string) EntityWithMemories {
