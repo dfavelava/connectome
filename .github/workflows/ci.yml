@@ -107,6 +107,23 @@ jobs:
       - run: uv run ty check
       - run: uv run pytest
 
+  python-client:
+    name: Python client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: connectomeClient
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: connectomeClient/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check
+      - run: uv run ty check
+      - run: uv run pytest
+
   docker:
     name: Docker build
     runs-on: ubuntu-latest
