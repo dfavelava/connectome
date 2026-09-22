@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, datetime
 from io import BytesIO
 from typing import Literal, NotRequired, TypedDict, get_args
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -94,6 +95,7 @@ class ConnectomeClient:
         path: str,
         *,
         params: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
         files: dict[str, tuple[str, BytesIO, str]] | None = None,
         json_body: dict[str, object] | None = None,
     ) -> httpx.Response:
@@ -103,6 +105,7 @@ class ConnectomeClient:
                 self._url(path),
                 headers=self._headers(),
                 params=params,
+                data=data,
                 files=files,
                 json=json_body,
             )
@@ -116,8 +119,13 @@ class ConnectomeClient:
         entities: list[str] | None = None,
         relationships: list[Relationship] | None = None,
         acl: list[str] | None = None,
+        tome: str | None = None,
     ) -> dict[str, str]:
-        """Write a memory document and return its key."""
+        """Write a memory document and return its key.
+
+        tome scopes the memory to its own namespace; it must match the tome
+        passed to any later get_memory/forget of this key. Omit for the
+        default tome."""
         memory_id = f"mem_{uuid.uuid4()}.md"
         now = datetime.now(UTC).isoformat()
         metadata: dict[str, object] = {
@@ -138,6 +146,7 @@ class ConnectomeClient:
             "POST",
             "/memory/",
             files={"file": (memory_id, BytesIO(document.encode("utf-8")), "text/plain; charset=utf-8")},
+            data={"tome": tome} if tome is not None else None,
         )
         return {"key": memory_id}
 
@@ -151,8 +160,11 @@ class ConnectomeClient:
         until: str | None = None,
         hydrate: bool = False,
         as_: str | None = None,
+        tome: str | None = None,
     ) -> dict[str, object]:
-        """Search memory by semantic similarity to query and return ranked results."""
+        """Search memory by semantic similarity to query and return ranked results.
+
+        tome restricts results to that tome; omit to search the default tome."""
         filters: dict[str, str] = {}
         if memory_type is not None:
             filters["type"] = memory_type
@@ -162,6 +174,8 @@ class ConnectomeClient:
             filters["since"] = since
         if until is not None:
             filters["until"] = until
+        if tome is not None:
+            filters["tome"] = tome
 
         body: dict[str, object] = {"query": query, "k": k, "hydrate": hydrate}
         if filters:
@@ -180,6 +194,7 @@ class ConnectomeClient:
         kind: str | None = None,
         subject_kind: str | None = None,
         subject_meta: dict[str, object] | None = None,
+        tome: str | None = None,
     ) -> dict[str, object]:
         """Assert a relationship between two entities via the Go backend's shared
         merge endpoint, so ent_*.json state (stub entities, member_of) ends up the
@@ -198,6 +213,8 @@ class ConnectomeClient:
             body["subjectKind"] = subject_kind
         if subject_meta is not None:
             body["subjectMeta"] = subject_meta
+        if tome is not None:
+            body["tome"] = tome
 
         response = await self._request("POST", "/entity/relationship", json_body=body)
         return response.json()
@@ -209,6 +226,7 @@ class ConnectomeClient:
         predicate: str,
         object_entity_id: str | None = None,
         superseded_by: str | None = None,
+        tome: str | None = None,
     ) -> dict[str, object]:
         """Set (or clear) superseded_by on one relationship entry of an existing memory.
 
@@ -224,18 +242,25 @@ class ConnectomeClient:
             "objectEntityId": object_entity_id,
             "superseded_by": superseded_by,
         }
+        if tome is not None:
+            body["tome"] = tome
         response = await self._request("PATCH", "/memory/relationship", json_body=body)
         return response.json()
 
-    async def get_memory(self, key: str) -> dict[str, object]:
-        """Fetch a stored memory document or entity record by key."""
-        response = await self._request("GET", "/memory/", params={"key": key})
+    async def get_memory(self, key: str, tome: str | None = None) -> dict[str, object]:
+        """Fetch a stored memory document or entity record by key.
+
+        tome must match the tome the record was written with."""
+        params = {"key": key}
+        if tome is not None:
+            params["tome"] = tome
+        response = await self._request("GET", "/memory/", params=params)
         return response.json()
 
-    async def get_entity(self, entity_id: str) -> dict[str, object] | None:
+    async def get_entity(self, entity_id: str, tome: str | None = None) -> dict[str, object] | None:
         """Fetch an ent_<id>.json entity record, or None if it doesn't exist yet."""
         try:
-            payload = await self.get_memory(entity_key(entity_id))
+            payload = await self.get_memory(entity_key(entity_id), tome=tome)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return None
@@ -244,12 +269,31 @@ class ConnectomeClient:
         assert isinstance(content, str)
         return json.loads(content)
 
-    async def browse_all(self) -> dict[str, object]:
-        """List all stored memory and entity keys."""
-        response = await self._request("GET", "/memory/list")
+    async def browse_all(self, tome: str | None = None) -> dict[str, object]:
+        """List all stored memory and entity keys in a tome (the default tome when omitted)."""
+        params = {"tome": tome} if tome is not None else None
+        response = await self._request("GET", "/memory/list", params=params)
         return response.json()
 
-    async def forget(self, key: str) -> dict[str, str]:
-        """Delete a stored memory or entity record by key."""
-        _ = await self._request("DELETE", "/memory/", json_body={"key": key})
+    async def forget(self, key: str, tome: str | None = None) -> dict[str, str]:
+        """Delete a stored memory or entity record by key.
+
+        tome must match the tome the record was written with."""
+        body: dict[str, object] = {"key": key}
+        if tome is not None:
+            body["tome"] = tome
+        _ = await self._request("DELETE", "/memory/", json_body=body)
         return {"message": "deleted", "key": key}
+
+    async def destroy_tome(self, tome: str, confirm: bool = False) -> dict[str, object]:
+        """Destroy every memory, entity record, and embedding stored under a tome.
+
+        Irreversible. The backend refuses to destroy the default tome, and
+        refuses any tome id that doesn't start with "temp-" or "test-" unless
+        confirm=True - see DestroyTome in backend/resources/tome.go. Those
+        refusals surface as httpx.HTTPStatusError (403)."""
+        if not tome:
+            raise ValueError("refusing to destroy the default tome; pass a non-empty tome id")
+        params = {"confirm": "true"} if confirm else None
+        response = await self._request("DELETE", f"/tome/{quote(tome, safe='')}", params=params)
+        return response.json()

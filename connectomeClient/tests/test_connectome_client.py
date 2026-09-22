@@ -370,6 +370,191 @@ async def test_forget_sends_delete_with_key_body(patch_async_client):
     assert result == {"message": "deleted", "key": "mem_abc.md"}
 
 
+async def test_remember_sends_tome_as_a_form_field(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "success"}))
+
+    client = make_client()
+    result = await client.remember("hello", tome="temp-abc")
+
+    body = last_request(patch_async_client).content.decode("utf-8")
+    assert 'name="tome"\r\n\r\ntemp-abc\r\n' in body
+    assert f'filename="{result["key"]}"' in body
+
+
+async def test_remember_omits_tome_field_when_not_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "success"}))
+
+    client = make_client()
+    _ = await client.remember("hello")
+
+    body = last_request(patch_async_client).content.decode("utf-8")
+    assert 'name="tome"' not in body
+
+
+async def test_recall_sends_tome_as_a_filter(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"results": []}))
+
+    client = make_client()
+    _ = await client.recall("what does david drink", tome="temp-abc")
+
+    body = json.loads(last_request(patch_async_client).content)
+    assert body["filters"] == {"tome": "temp-abc"}
+
+
+async def test_recall_combines_tome_with_other_filters(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"results": []}))
+
+    client = make_client()
+    _ = await client.recall("tea", entity="david", tome="temp-abc")
+
+    body = json.loads(last_request(patch_async_client).content)
+    assert body["filters"] == {"entity": "david", "tome": "temp-abc"}
+
+
+async def test_assert_relationship_includes_tome_when_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"subject": {"id": "west-1"}}))
+
+    client = make_client()
+    _ = await client.assert_relationship("west-1", "member_of", "Party A", tome="temp-abc")
+
+    body = json.loads(last_request(patch_async_client).content)
+    assert body["tome"] == "temp-abc"
+
+
+async def test_supersede_relationship_includes_tome_when_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "success"}))
+
+    client = make_client()
+    _ = await client.supersede_relationship("mem_old.md", "west-1", "plays", tome="temp-abc")
+
+    body = json.loads(last_request(patch_async_client).content)
+    assert body["tome"] == "temp-abc"
+
+
+async def test_get_memory_sends_tome_as_query_param(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"content": "..."}))
+
+    client = make_client()
+    _ = await client.get_memory("mem_abc.md", tome="temp-abc")
+
+    params = last_request(patch_async_client).url.params
+    assert params["key"] == "mem_abc.md"
+    assert params["tome"] == "temp-abc"
+
+
+async def test_get_memory_omits_tome_param_when_not_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"content": "..."}))
+
+    client = make_client()
+    _ = await client.get_memory("mem_abc.md")
+
+    assert "tome" not in last_request(patch_async_client).url.params
+
+
+async def test_get_entity_forwards_tome(patch_async_client):
+    set_handler(
+        patch_async_client,
+        lambda request: httpx.Response(200, json={"content": json.dumps({"id": "thorin"})}),
+    )
+
+    client = make_client()
+    entity = await client.get_entity("thorin", tome="temp-abc")
+
+    params = last_request(patch_async_client).url.params
+    assert params["key"] == "ent_thorin.json"
+    assert params["tome"] == "temp-abc"
+    assert entity == {"id": "thorin"}
+
+
+async def test_browse_all_sends_tome_as_query_param(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"Contents": []}))
+
+    client = make_client()
+    _ = await client.browse_all(tome="temp-abc")
+
+    request = last_request(patch_async_client)
+    assert request.url.path == "/api/connectome/memory/list"
+    assert request.url.params["tome"] == "temp-abc"
+
+
+async def test_browse_all_omits_tome_param_when_not_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"Contents": []}))
+
+    client = make_client()
+    _ = await client.browse_all()
+
+    assert "tome" not in last_request(patch_async_client).url.params
+
+
+async def test_forget_includes_tome_in_body_when_given(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={}))
+
+    client = make_client()
+    result = await client.forget("mem_abc.md", tome="temp-abc")
+
+    assert json.loads(last_request(patch_async_client).content) == {"key": "mem_abc.md", "tome": "temp-abc"}
+    assert result == {"message": "deleted", "key": "mem_abc.md"}
+
+
+async def test_destroy_tome_sends_delete_without_confirm_by_default(patch_async_client):
+    set_handler(
+        patch_async_client,
+        lambda request: httpx.Response(200, json={"message": "destroyed", "tome": "temp-abc"}),
+    )
+
+    client = make_client()
+    result = await client.destroy_tome("temp-abc")
+
+    request = last_request(patch_async_client)
+    assert request.method == "DELETE"
+    assert str(request.url) == "http://example.test/api/connectome/tome/temp-abc"
+    assert result == {"message": "destroyed", "tome": "temp-abc"}
+
+
+async def test_destroy_tome_sends_confirm_when_requested(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "destroyed"}))
+
+    client = make_client()
+    _ = await client.destroy_tome("west-marches", confirm=True)
+
+    request = last_request(patch_async_client)
+    assert request.url.path == "/api/connectome/tome/west-marches"
+    assert request.url.params["confirm"] == "true"
+
+
+async def test_destroy_tome_percent_encodes_the_tome_id(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "destroyed"}))
+
+    client = make_client()
+    _ = await client.destroy_tome("temp-a b?c#d")
+
+    request = last_request(patch_async_client)
+    assert request.url.raw_path.decode() == "/api/connectome/tome/temp-a%20b%3Fc%23d"
+    assert request.url.query == b""
+
+
+async def test_destroy_tome_refuses_the_default_tome_without_a_request(patch_async_client):
+    client = make_client()
+
+    with pytest.raises(ValueError, match="default tome"):
+        _ = await client.destroy_tome("")
+
+    assert not patch_async_client.transports
+
+
+async def test_destroy_tome_surfaces_the_backends_guard_as_an_http_error(patch_async_client):
+    set_handler(
+        patch_async_client,
+        lambda request: httpx.Response(403, json={"error": "destroying this tome requires confirm=true"}),
+    )
+
+    client = make_client()
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        _ = await client.destroy_tome("west-marches")
+
+    assert excinfo.value.response.status_code == 403
+
+
 async def test_raises_on_http_error(patch_async_client):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "unauthorized"})
