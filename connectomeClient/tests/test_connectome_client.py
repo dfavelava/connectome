@@ -573,3 +573,26 @@ def test_api_key_falls_back_to_daybid_env_vars(monkeypatch):
     client = ConnectomeClient(base_url="http://example.test")
 
     assert client.api_key == "fallback-key"
+
+
+def test_cf_access_headers_sent_only_when_both_credentials_set(monkeypatch):
+    monkeypatch.delenv("CF_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CF_ACCESS_CLIENT_SECRET", raising=False)
+
+    headers = make_client(cf_access_client_id="id.access", cf_access_client_secret="secret")._headers()
+    assert headers["CF-Access-Client-Id"] == "id.access"
+    assert headers["CF-Access-Client-Secret"] == "secret"
+
+    headers = make_client(cf_access_client_id="id.access")._headers()
+    assert "CF-Access-Client-Id" not in headers
+    assert "CF-Access-Client-Secret" not in headers
+
+
+def test_cf_access_credentials_fall_back_to_env_vars(monkeypatch):
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "env-id.access")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "env-secret")
+
+    headers = make_client()._headers()
+
+    assert headers["CF-Access-Client-Id"] == "env-id.access"
+    assert headers["CF-Access-Client-Secret"] == "env-secret"

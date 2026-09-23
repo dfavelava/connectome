@@ -117,11 +117,27 @@ def get_api_key() -> str | None:
     return os.getenv("CONNECTOME_API_KEY") or os.getenv("apikey")
 
 
+def get_cf_access_credentials() -> tuple[str, str] | None:
+    """Cloudflare Access service-token credentials, if both are set.
+
+    Needed when the backend sits behind Cloudflare Access; without them every
+    request is redirected to the Access login page instead of reaching the API.
+    """
+    client_id = os.getenv("CF_ACCESS_CLIENT_ID")
+    client_secret = os.getenv("CF_ACCESS_CLIENT_SECRET")
+    if client_id and client_secret:
+        return client_id, client_secret
+    return None
+
+
 def get_headers() -> dict[str, str]:
     headers = {"User-Agent": USER_AGENT}
     api_key = get_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    cf_access = get_cf_access_credentials()
+    if cf_access:
+        headers["CF-Access-Client-Id"], headers["CF-Access-Client-Secret"] = cf_access
     return headers
 
 

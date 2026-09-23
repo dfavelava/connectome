@@ -24,6 +24,13 @@ CONNECTOME_API_KEY=your-api-key
 
 Set `CONNECTOME_API_KEY` to the same value as `apikey` in `backend/.env`.
 
+If the backend sits behind Cloudflare Access, also set a service token (both are required; the headers are skipped otherwise):
+
+```dotenv
+CF_ACCESS_CLIENT_ID=your-service-token-id.access
+CF_ACCESS_CLIENT_SECRET=your-service-token-secret
+```
+
 The MCP server loads this file automatically on startup. `CONNECTOME_API_BASE_URL` defaults to `http://localhost:8080/api/connectome` if omitted.
 
 The backend mounts every memory route under the `/api/connectome` prefix (`/api` base group + `/connectome` group). See the "API" section of the root [`README.md`](../README.md) for the canonical route list.
