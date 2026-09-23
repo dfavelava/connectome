@@ -38,6 +38,12 @@ environment variable if not passed explicitly. This package does not load a
 `.env` file itself - the calling application is responsible for loading its
 own environment (e.g. via `python-dotenv`) before constructing a client.
 
+If the backend sits behind Cloudflare Access, pass a service token via
+`cf_access_client_id` / `cf_access_client_secret` (or the `CF_ACCESS_CLIENT_ID`
+/ `CF_ACCESS_CLIENT_SECRET` environment variables). They are sent as the
+`CF-Access-Client-Id` / `CF-Access-Client-Secret` headers on every request,
+only when both are set.
+
 ### Tomes
 
 A tome is an isolated namespace: memories written to one tome are invisible to

@@ -73,17 +73,26 @@ class ConnectomeClient:
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         user_agent: str = DEFAULT_USER_AGENT,
         source_type: str = DEFAULT_SOURCE_TYPE,
+        cf_access_client_id: str | None = None,
+        cf_access_client_secret: str | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("CONNECTOME_API_BASE_URL", DEFAULT_API_BASE_URL)).rstrip("/")
         self.api_key = api_key or os.getenv("CONNECTOME_API_KEY") or os.getenv("DAYBID_API_KEY") or os.getenv("apikey")
         self.timeout = timeout
         self.user_agent = user_agent
         self.source_type = source_type
+        # Cloudflare Access service-token credentials, for backends behind
+        # Access; sent only when both halves are present.
+        self.cf_access_client_id = cf_access_client_id or os.getenv("CF_ACCESS_CLIENT_ID")
+        self.cf_access_client_secret = cf_access_client_secret or os.getenv("CF_ACCESS_CLIENT_SECRET")
 
     def _headers(self) -> dict[str, str]:
         headers = {"User-Agent": self.user_agent}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.cf_access_client_id and self.cf_access_client_secret:
+            headers["CF-Access-Client-Id"] = self.cf_access_client_id
+            headers["CF-Access-Client-Secret"] = self.cf_access_client_secret
         return headers
 
     def _url(self, path: str) -> str:
