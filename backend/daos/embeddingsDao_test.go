@@ -60,6 +60,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 			acl TEXT[] NOT NULL DEFAULT '{}',
 			tome_id TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			occurred_at TIMESTAMPTZ,
 			UNIQUE (memory_key, chunk_index)
 		)`); err != nil {
 		t.Fatalf("create embeddings table: %v", err)
@@ -177,6 +178,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 
 	now := time.Now().UTC()
 	yesterday := now.Add(-24 * time.Hour)
+	occurredLastYear := now.Add(-365 * 24 * time.Hour)
 
 	// closeKey's chunk 0 is an exact match for the query; its chunk 1 is
 	// orthogonal (far), so a correct collapse must surface chunk 0.
@@ -186,8 +188,11 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert closeKey: %v", err)
 	}
+	// midKey's occurred_at is much older than its created_at, so an
+	// occurred_since/until filter and a since/until filter disagree on it -
+	// proving the two aren't conflated.
 	if err := dao.InsertEmbeddings(ctx, midKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: blendVector(768), Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"grace"}, CreatedAt: yesterday},
+		{ChunkIndex: 0, Embedding: blendVector(768), Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"grace"}, CreatedAt: yesterday, OccurredAt: &occurredLastYear},
 	}); err != nil {
 		t.Fatalf("insert midKey: %v", err)
 	}
@@ -276,6 +281,41 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 		}
 		if len(keys) != 1 || keys[0] != midKey {
 			t.Fatalf("expected only midKey for until=yesterday+1h, got %v", keys)
+		}
+	})
+
+	t.Run("occurred_since/occurred_until filter by occurred_at, independent of created_at", func(t *testing.T) {
+		// midKey occurred a year ago (much earlier than its created_at of
+		// yesterday). An occurred_since bound at -1h excludes it, same as a
+		// since bound would, but for the opposite reason (occurred_at, not
+		// created_at).
+		occurredSince := now.Add(-1 * time.Hour)
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{OccurredSince: &occurredSince})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		for _, h := range hits {
+			if h.MemoryKey == midKey {
+				t.Fatalf("expected midKey (occurred a year ago) excluded by occurred_since filter, got %+v", h)
+			}
+		}
+
+		// closeKey and farKey have no occurred_at at all, so an
+		// occurred_until bound must exclude them too, not fall back to
+		// created_at.
+		occurredUntil := occurredLastYear.Add(1 * time.Hour)
+		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{OccurredUntil: &occurredUntil})
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		var keys []string
+		for _, h := range hits {
+			if h.MemoryKey == closeKey || h.MemoryKey == midKey || h.MemoryKey == farKey {
+				keys = append(keys, h.MemoryKey)
+			}
+		}
+		if len(keys) != 1 || keys[0] != midKey {
+			t.Fatalf("expected only midKey (the sole row with an occurred_at) for occurred_until=occurredLastYear+1h, got %v", keys)
 		}
 	})
 

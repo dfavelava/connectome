@@ -167,6 +167,10 @@ def test_recall_tome_scopes_results_to_the_default_tome(backend: Backend) -> Non
     asyncio.run(_recall_tome_scope(backend))
 
 
+def test_recall_occurred_at_filters_are_distinct_from_created_at(backend: Backend) -> None:
+    asyncio.run(_recall_occurred_at_filter(backend))
+
+
 async def _roundtrip(backend: Backend) -> None:
     from connectomemcp.server import Entity, browse_all, forget, get_memory, remember
 
@@ -361,7 +365,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
     try:
         # --- plain semantic search surfaces the relevant memory first ------
         results = json.loads(
-            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, hydrate=False, as_=None, tome=None)
+            await recall(query="What does David like to drink?", k=5, memory_type=None, entity=None, since=None, until=None, occurred_since=None, occurred_until=None, hydrate=False, as_=None, tome=None)
         )["results"]
         keys = [r["key"] for r in results]
         assert keys, "expected at least one recall result"
@@ -373,7 +377,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         fact_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, hydrate=False, as_=None, tome=None)
+                await recall(query="algorithms and debugging", k=5, memory_type="fact", entity=None, since=None, until=None, occurred_since=None, occurred_until=None, hydrate=False, as_=None, tome=None)
             )["results"]
         }
         assert tea_key not in fact_keys
@@ -383,7 +387,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
         ada_keys = {
             r["key"]
             for r in json.loads(
-                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, hydrate=False, as_=None, tome=None)
+                await recall(query="Ada Lovelace", k=5, memory_type=None, entity="ada", since=None, until=None, occurred_since=None, occurred_until=None, hydrate=False, as_=None, tome=None)
             )["results"]
         }
         assert ada_key in ada_keys
@@ -391,7 +395,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
 
         # --- hydrate returns the full memory body, not just a snippet ------
         hydrated = json.loads(
-            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, hydrate=True, as_=None, tome=None)
+            await recall(query="What does David like to drink?", k=1, memory_type=None, entity=None, since=None, until=None, occurred_since=None, occurred_until=None, hydrate=True, as_=None, tome=None)
         )["results"]
         assert hydrated
         assert "David prefers tea over coffee in the afternoon." in hydrated[0]["content"]
@@ -431,6 +435,8 @@ async def _recall_tome_scope(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_=None,
                     tome=None,
@@ -450,6 +456,8 @@ async def _recall_tome_scope(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_=None,
                     tome="west-marches",
@@ -680,6 +688,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_="alice",
                     tome=None,
@@ -701,6 +711,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_=None,
                     tome=None,
@@ -765,6 +777,8 @@ async def _facet_recall(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_="GM",
                     tome=None,
@@ -786,6 +800,8 @@ async def _facet_recall(backend: Backend) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_="alice",
                     tome=None,
@@ -862,3 +878,89 @@ async def _tome_scoping(backend: Backend) -> None:
         await forget(memory_key, tome=tome)
         await forget("ent_ada.json", tome=tome)
         await forget("ent_cartographers.json", tome=tome)
+
+
+async def _recall_occurred_at_filter(backend: Backend) -> None:
+    from connectomemcp.server import forget, get_memory, recall, remember
+
+    # old_key's occurred_at is far in the past even though it's written (and
+    # thus created_at'd) now, proving occurred_since/occurred_until bound
+    # occurred_at rather than created_at.
+    old_occurred_at = "1969-07-20T20:17:00+00:00"
+    old = json.loads(
+        await remember(
+            content="Ashvale's founding charter was signed the day the tide ran red.",
+            entities=[],
+            relationships=[],
+            memory_type="event",
+            acl=None,
+            derived_from=None,
+            tome=None,
+            occurred_at=old_occurred_at,
+        )
+    )
+    # recent has no occurred_at at all.
+    recent = json.loads(
+        await remember(
+            content="Ashvale's harbor market reopened this morning after repairs.",
+            entities=[],
+            relationships=[],
+            memory_type="event",
+            acl=None,
+            derived_from=None,
+            tome=None,
+        )
+    )
+    old_key, recent_key = old["key"], recent["key"]
+
+    try:
+        # --- get_memory surfaces occurred_at when present -------------------
+        fetched = json.loads(await get_memory(old_key, tome=None))
+        content = fetched["content"]
+        assert old_occurred_at.replace("+00:00", "") in content or "1969-07-20" in content
+
+        # --- occurred_until bounded to the past excludes the undated memory,
+        # --- (undated is never treated as a match) and finds the old one ----
+        bounded_results = json.loads(
+            await recall(
+                query="Ashvale",
+                k=10,
+                memory_type=None,
+                entity=None,
+                since=None,
+                until=None,
+                occurred_since=None,
+                occurred_until="1970-01-01T00:00:00Z",
+                hydrate=False,
+                as_=None,
+                tome=None,
+            )
+        )["results"]
+        bounded_keys = {r["key"] for r in bounded_results}
+        assert old_key in bounded_keys
+        assert recent_key not in bounded_keys
+
+        # --- occurred_since bounded to the recent past excludes both: the
+        # --- old memory fails the bound, and the undated one has no
+        # --- occurred_at to satisfy it -----------------------------------
+        recent_bound_results = json.loads(
+            await recall(
+                query="Ashvale",
+                k=10,
+                memory_type=None,
+                entity=None,
+                since=None,
+                until=None,
+                occurred_since="2000-01-01T00:00:00Z",
+                occurred_until=None,
+                hydrate=False,
+                as_=None,
+                tome=None,
+            )
+        )["results"]
+        recent_bound_keys = {r["key"] for r in recent_bound_results}
+        assert old_key not in recent_bound_keys
+        assert recent_key not in recent_bound_keys
+    finally:
+        await forget(old_key, tome=None)
+        await forget(recent_key, tome=None)

@@ -29,6 +29,9 @@ type EmbeddingRow struct {
 	ACL        []string
 	TomeID     string
 	CreatedAt  time.Time
+	// OccurredAt is when the memory's described event happened, distinct from
+	// CreatedAt (when it was written). Nil stores NULL: event time unknown.
+	OccurredAt *time.Time
 }
 
 // NearestNeighbor is one hit from a nearest-neighbour search over embeddings.
@@ -59,9 +62,9 @@ func (dao *EmbeddingsDao) InsertEmbeddings(ctx context.Context, memoryKey string
 	batch := &pgx.Batch{}
 	for _, row := range rows {
 		batch.Queue(
-			`INSERT INTO embeddings (memory_key, chunk_index, embedding, chunk_text, model, dim, type, entity_ids, acl, tome_id, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			memoryKey, row.ChunkIndex, pgvector.NewVector(row.Embedding), row.ChunkText, row.Model, row.Dim, row.Type, row.EntityIDs, row.ACL, row.TomeID, row.CreatedAt,
+			`INSERT INTO embeddings (memory_key, chunk_index, embedding, chunk_text, model, dim, type, entity_ids, acl, tome_id, created_at, occurred_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			memoryKey, row.ChunkIndex, pgvector.NewVector(row.Embedding), row.ChunkText, row.Model, row.Dim, row.Type, row.EntityIDs, row.ACL, row.TomeID, row.CreatedAt, row.OccurredAt,
 		)
 	}
 
@@ -132,8 +135,16 @@ func (dao *EmbeddingsDao) NearestNeighbors(ctx context.Context, query []float32,
 type SearchFilters struct {
 	Type   *string
 	Entity *string
-	Since  *time.Time
-	Until  *time.Time
+	// Since and Until bound created_at (when the memory was written).
+	Since *time.Time
+	Until *time.Time
+
+	// OccurredSince and OccurredUntil bound occurred_at (when the described
+	// event happened). A row with no occurred_at never satisfies either
+	// bound - it is excluded rather than falling back to created_at, which
+	// would conflate the two timestamps.
+	OccurredSince *time.Time
+	OccurredUntil *time.Time
 
 	// ACLScope, when non-nil, restricts results to embeddings whose acl
 	// column is empty (unrestricted) or overlaps this set of entity/group
@@ -234,17 +245,22 @@ type chunkRef struct {
 
 // candidateFilterSQL is shared by the vector and full-text candidate queries
 // below (each binds it starting at $2, with $1 reserved for its own ranking
-// expression, $6 for the LIMIT, $7 for ACLScope, and $8 for TomeID). A NULL
-// $7 (ACLScope nil - no `as` given) applies no acl filtering; otherwise a row
-// passes when its acl is empty (unrestricted) or overlaps $7. $8 is always
-// compared exactly, since TomeID is never nil - see SearchFilters.TomeID.
+// expression, $6 for the LIMIT, $7 for ACLScope, $8 for TomeID, and $9/$10 for
+// OccurredSince/OccurredUntil). A NULL $7 (ACLScope nil - no `as` given)
+// applies no acl filtering; otherwise a row passes when its acl is empty
+// (unrestricted) or overlaps $7. $8 is always compared exactly, since TomeID
+// is never nil - see SearchFilters.TomeID. A NULL $9/$10 applies no bound; a
+// non-NULL one compares occurred_at, which is NULL for a memory with no
+// occurred_at, so that row fails the comparison and is excluded.
 const candidateFilterSQL = `
 	  ($2::text IS NULL OR type = $2)
 	  AND ($3::text IS NULL OR $3 = ANY(entity_ids))
 	  AND ($4::timestamptz IS NULL OR created_at >= $4)
 	  AND ($5::timestamptz IS NULL OR created_at <= $5)
 	  AND ($7::text[] IS NULL OR cardinality(acl) = 0 OR acl && $7::text[])
-	  AND tome_id = $8`
+	  AND tome_id = $8
+	  AND ($9::timestamptz IS NULL OR occurred_at >= $9)
+	  AND ($10::timestamptz IS NULL OR occurred_at <= $10)`
 
 // vectorCandidates returns up to limit chunks ordered by ascending cosine
 // distance to query, at chunk granularity (not collapsed per memory key).
@@ -255,7 +271,7 @@ func (dao *EmbeddingsDao) vectorCandidates(ctx context.Context, query []float32,
 		 WHERE`+candidateFilterSQL+`
 		 ORDER BY embedding <=> $1
 		 LIMIT $6`,
-		pgvector.NewVector(query), filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID,
+		pgvector.NewVector(query), filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("vector candidates: %w", err)
@@ -278,7 +294,7 @@ func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, 
 		   AND`+candidateFilterSQL+`
 		 ORDER BY ts_rank(search_vector, query) DESC
 		 LIMIT $6`,
-		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID,
+		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("text candidates: %w", err)

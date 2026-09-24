@@ -198,6 +198,11 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 		return nil
 	}
 
+	occurredAt, err := fm.occurredAt()
+	if err != nil {
+		return fmt.Errorf("index %s: %w", key, err)
+	}
+
 	chunks := ChunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
 
 	rows := make([]daos.EmbeddingRow, len(chunks))
@@ -219,6 +224,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 			ACL:        acl,
 			TomeID:     tome,
 			CreatedAt:  createdAt,
+			OccurredAt: occurredAt,
 		}
 	}
 

@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -20,9 +21,13 @@ var validMemoryTypes = map[string]bool{
 // (see connectomeMCP/src/connectomemcp/server.py's format_memory) needed to index a
 // memory.
 type memoryFrontmatter struct {
-	Type      string   `yaml:"type"`
-	CreatedAt string   `yaml:"created_at"`
-	Entities  []string `yaml:"entities"`
+	Type      string `yaml:"type"`
+	CreatedAt string `yaml:"created_at"`
+	// OccurredAt is when the described event happened (RFC3339), as opposed
+	// to CreatedAt, which is when the memory was written. Empty means
+	// unknown - see occurredAt.
+	OccurredAt string   `yaml:"occurred_at"`
+	Entities   []string `yaml:"entities"`
 	// ACL is a pointer so an omitted key (nil) is distinguishable from an
 	// explicit empty list - see ResolveACL in acl.go.
 	ACL *[]string `yaml:"acl"`
@@ -75,6 +80,22 @@ func (fm memoryFrontmatter) createdAtOrNow() time.Time {
 		return t
 	}
 	return time.Now().UTC()
+}
+
+// occurredAt returns the memory's occurred_at as a time, or nil when the key
+// is absent (event time unknown). Unlike createdAtOrNow it never falls back
+// to a default: a present-but-malformed value is an error rather than being
+// silently replaced, since inventing an event time would reintroduce the
+// created_at/occurred_at conflation this field exists to avoid.
+func (fm memoryFrontmatter) occurredAt() (*time.Time, error) {
+	if fm.OccurredAt == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, fm.OccurredAt)
+	if err != nil {
+		return nil, fmt.Errorf("invalid occurred_at %q (want RFC3339): %w", fm.OccurredAt, err)
+	}
+	return &t, nil
 }
 
 // ChunkWords splits text into ~chunkSize-word chunks with overlap words of

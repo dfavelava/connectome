@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -380,6 +381,66 @@ func TestMemoryReadHydratesACLForPreOneOneMemory(t *testing.T) {
 	if string(onDisk) != doc {
 		t.Fatalf("expected the stored blob to be untouched by hydration, got %q", string(onDisk))
 	}
+}
+
+// TestMemoryWriteIndexesOccurredAt covers occurred_at's three states: absent
+// (nil on the row), present and valid (parsed onto the row), and present but
+// malformed (the write is rejected rather than silently dropping or
+// misinterpreting it as created_at).
+func TestMemoryWriteIndexesOccurredAt(t *testing.T) {
+	srv, _, indexer := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	t.Run("absent occurred_at leaves the row's OccurredAt nil", func(t *testing.T) {
+		const key = "mem_occurred_absent.md"
+		body, contentType := multipartBody(t, []filePart{{name: key, content: memoryDocument("note", "body", nil)}})
+		resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+		}
+		rows := indexer.rowsFor(key)
+		if len(rows) != 1 || rows[0].OccurredAt != nil {
+			t.Fatalf("expected nil OccurredAt, got %+v", rows)
+		}
+	})
+
+	t.Run("valid occurred_at is parsed onto the row", func(t *testing.T) {
+		const key = "mem_occurred_valid.md"
+		doc := "---\n" +
+			"type: event\n" +
+			"created_at: \"2024-01-01T00:00:00Z\"\n" +
+			"occurred_at: \"2023-06-15T09:30:00Z\"\n" +
+			"entities: []\n" +
+			"---\nbody\n"
+		body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
+		resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("write: expected 200, got %d (%s)", resp.StatusCode, payload)
+		}
+		rows := indexer.rowsFor(key)
+		want := time.Date(2023, 6, 15, 9, 30, 0, 0, time.UTC)
+		if len(rows) != 1 || rows[0].OccurredAt == nil || !rows[0].OccurredAt.Equal(want) {
+			t.Fatalf("expected OccurredAt %v, got %+v", want, rows)
+		}
+	})
+
+	t.Run("malformed occurred_at rejects the write", func(t *testing.T) {
+		const key = "mem_occurred_bad.md"
+		doc := "---\n" +
+			"type: event\n" +
+			"created_at: \"2024-01-01T00:00:00Z\"\n" +
+			"occurred_at: \"not-a-date\"\n" +
+			"entities: []\n" +
+			"---\nbody\n"
+		body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
+		resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
+		if resp.StatusCode == http.StatusOK {
+			t.Fatalf("expected write to reject malformed occurred_at, got 200 (%s)", payload)
+		}
+		if len(indexer.rowsFor(key)) != 0 {
+			t.Fatalf("expected no rows indexed for a rejected write")
+		}
+	})
 }
 
 func TestMemoryBatchWriteAndBatchRead(t *testing.T) {

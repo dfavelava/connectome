@@ -92,6 +92,25 @@ func TestHydrateMemoryDocumentPreservesDerivedFrom(t *testing.T) {
 	}
 }
 
+func TestHydrateMemoryDocumentPreservesOccurredAt(t *testing.T) {
+	doc := "---\n" +
+		"version: connectome/memory/0.1\n" +
+		"id: mem_event.md\n" +
+		"type: event\n" +
+		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"occurred_at: \"2023-06-15T09:30:00Z\"\n" +
+		"source:\n  type: mcp\n  created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"entities: []\n" +
+		"relationships: []\n" +
+		"derived_from: null\n" +
+		"---\nbody\n"
+
+	fm := parseHydratedFrontmatter(t, HydrateMemoryDocument(doc))
+	if fm.OccurredAt != "2023-06-15T09:30:00Z" {
+		t.Fatalf("expected occurred_at to survive hydration, got %q", fm.OccurredAt)
+	}
+}
+
 func TestHydrateMemoryDocumentIsNoOpWhenAlreadyCompliant(t *testing.T) {
 	doc := "---\n" +
 		"type: note\n" +

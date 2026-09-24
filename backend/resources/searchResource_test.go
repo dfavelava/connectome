@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
@@ -342,6 +343,28 @@ func TestSearchWithTomeFilterScopesToThatTome(t *testing.T) {
 
 	if got := index.gotFilters.TomeID; got != "west-marches" {
 		t.Fatalf("expected TomeID %q, got %q", "west-marches", got)
+	}
+}
+
+func TestSearchWithOccurredFiltersPassesThemDistinctFromSinceUntil(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+
+	resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+		strings.NewReader(`{"query":"anything","filters":{"since":"2020-01-01T00:00:00Z","occurred_since":"1999-01-01T00:00:00Z","occurred_until":"1999-12-31T00:00:00Z"}}`),
+		map[string]string{"Content-Type": "application/json"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+
+	filters := index.gotFilters
+	if filters.Since == nil || !filters.Since.Equal(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected Since 2020-01-01, got %v", filters.Since)
+	}
+	if filters.OccurredSince == nil || !filters.OccurredSince.Equal(time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected OccurredSince 1999-01-01, got %v", filters.OccurredSince)
+	}
+	if filters.OccurredUntil == nil || !filters.OccurredUntil.Equal(time.Date(1999, 12, 31, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected OccurredUntil 1999-12-31, got %v", filters.OccurredUntil)
 	}
 }
 

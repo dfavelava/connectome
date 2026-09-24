@@ -1,6 +1,7 @@
 import asyncio
 
 import frontmatter
+import pytest
 
 from connectomemcp import server
 from connectomemcp.server import (
@@ -18,6 +19,7 @@ from connectomemcp.server import (
     merge_kind,
     merge_meta,
     stub_entities_for_relationships,
+    validate_occurred_at,
 )
 
 CREATED_AT = "2026-09-09T00:00:00+00:00"
@@ -117,6 +119,43 @@ def test_format_memory_preserves_explicit_empty_acl():
 
     assert post["acl"] == []
     assert payload["metadata"]["acl"] == []
+
+
+def test_format_memory_defaults_occurred_at_to_none():
+    document, payload = format_memory("mem_no_occurred.md", "body", [], [], CREATED_AT)
+
+    post = frontmatter.loads(document)
+
+    assert post["occurred_at"] is None
+    assert payload["metadata"]["occurred_at"] is None
+
+
+def test_format_memory_writes_explicit_occurred_at():
+    occurred_at = "2023-06-15T09:30:00+00:00"
+    document, payload = format_memory(
+        "mem_occurred.md", "body", [], [], CREATED_AT, occurred_at=occurred_at
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["occurred_at"] == occurred_at
+    assert post["created_at"] == CREATED_AT
+    assert payload["metadata"]["occurred_at"] == occurred_at
+
+
+def test_format_memory_rejects_malformed_occurred_at():
+    with pytest.raises(ValueError, match="occurred_at"):
+        format_memory("mem_bad_occurred.md", "body", [], [], CREATED_AT, occurred_at="not-a-date")
+
+
+def test_validate_occurred_at_accepts_none_and_rfc3339():
+    validate_occurred_at(None)
+    validate_occurred_at("2023-06-15T09:30:00Z")
+
+
+def test_validate_occurred_at_rejects_malformed_value():
+    with pytest.raises(ValueError, match="occurred_at"):
+        validate_occurred_at("not-a-date")
 
 
 def test_format_memory_defaults_derived_from_to_none():

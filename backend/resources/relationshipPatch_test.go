@@ -16,6 +16,7 @@ func relationshipMemoryDocument(relationshipsYAML string) string {
 		"id: mem_rel.md\n" +
 		"type: fact\n" +
 		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"occurred_at: \"2023-06-15T09:30:00Z\"\n" +
 		"source:\n  type: mcp\n  created_at: \"2024-01-01T00:00:00Z\"\n" +
 		"entities: [\"david\", \"grace\"]\n" +
 		"relationships:\n" + relationshipsYAML +
@@ -67,6 +68,9 @@ func TestPatchRelationshipSupersededBySetsMatchingEntryOnly(t *testing.T) {
 	}
 	if len(out.Entities) != 2 || out.Entities[0] != "david" || out.Entities[1] != "grace" {
 		t.Fatalf("expected entities preserved, got %v", out.Entities)
+	}
+	if out.OccurredAt != "2023-06-15T09:30:00Z" {
+		t.Fatalf("expected occurred_at preserved, got %q", out.OccurredAt)
 	}
 }
 
