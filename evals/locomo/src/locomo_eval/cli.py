@@ -68,7 +68,8 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_to_dia:
 
     # Search returns tome-scoped blob keys (tomes/<tome>/mem_<uuid>.md - see
     # TomeScopedKey in backend/resources/tome.go), while remember returns the
-    # bare key, so strip the scope before mapping back to a dialog id.
+    # bare key, so strip the scope before mapping back to a dialog id. Tracked
+    # as issue #16; removeprefix stays a no-op once search returns bare keys.
     scope_prefix = f"tomes/{tome}/"
 
     async def ask(question: str) -> tuple[str, ...]:
