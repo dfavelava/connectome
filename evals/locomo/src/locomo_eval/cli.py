@@ -66,18 +66,12 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_to_dia:
     skipped = {"no_evidence": 0, "unknown_evidence_only": 0, "unknown_evidence_ids": 0}
     semaphore = asyncio.Semaphore(concurrency)
 
-    # Search returns tome-scoped blob keys (tomes/<tome>/mem_<uuid>.md - see
-    # TomeScopedKey in backend/resources/tome.go), while remember returns the
-    # bare key, so strip the scope before mapping back to a dialog id. Tracked
-    # as issue #16; removeprefix stays a no-op once search returns bare keys.
-    scope_prefix = f"tomes/{tome}/"
-
     async def ask(question: str) -> tuple[str, ...]:
         async with semaphore:
             response = await client.recall(question, k=k, tome=tome)
         hits = response.get("results") or []
         assert isinstance(hits, list)
-        keys = [hit["key"].removeprefix(scope_prefix) for hit in hits]
+        keys = [hit["key"] for hit in hits]
         if unknown := [key for key in keys if key not in key_to_dia]:
             # Every hit comes from this run's own tome, so an unmapped key means
             # the key shape changed - fail rather than silently score zero.

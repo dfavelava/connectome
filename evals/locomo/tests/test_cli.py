@@ -32,8 +32,7 @@ class FakeClient:
             raise RuntimeError("boom")
         words = set(query.lower().strip("?").split())
         hits = [key for key, text in self.tomes.get(tome, {}).items() if words & set(text.lower().split())]
-        # Mirrors the backend: search returns tome-scoped keys, remember bare ones.
-        return {"results": [{"key": f"tomes/{tome}/{key}"} for key in hits[:k]]}
+        return {"results": [{"key": key} for key in hits[:k]]}
 
     async def destroy_tome(self, tome, confirm=False):
         self.destroyed.append(tome)
