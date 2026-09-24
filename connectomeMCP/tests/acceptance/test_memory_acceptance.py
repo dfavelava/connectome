@@ -54,6 +54,7 @@ async def _remember_recall_supersede(tome: str) -> None:
             acl=None,
             derived_from=None,
             tome=tome,
+            occurred_at=None,
         )
     )
     sighting_key = sighting["key"]
@@ -67,6 +68,8 @@ async def _remember_recall_supersede(tome: str) -> None:
             entity="party-a",
             since=None,
             until=None,
+            occurred_since=None,
+            occurred_until=None,
             hydrate=True,
             as_=None,
             tome=tome,
@@ -91,6 +94,8 @@ async def _remember_recall_supersede(tome: str) -> None:
                     entity=None,
                     since=None,
                     until=None,
+                    occurred_since=None,
+                    occurred_until=None,
                     hydrate=False,
                     as_=None,
                     tome=other_tome,

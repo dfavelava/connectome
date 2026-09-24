@@ -186,6 +186,7 @@ async def _roundtrip(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     memory_key = first["key"]
@@ -224,6 +225,7 @@ async def _roundtrip(backend: Backend) -> None:
                 acl=None,
                 derived_from=None,
                 tome=None,
+                occurred_at=None,
             )
         )
         second_key = second["key"]
@@ -274,6 +276,7 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     key = first["key"]
@@ -295,6 +298,7 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
                 acl=None,
                 derived_from=None,
                 tome=None,
+                occurred_at=None,
             )
         )
         second_key = second["key"]
@@ -330,6 +334,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     ada_fact = json.loads(
@@ -341,6 +346,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     grace_fact = json.loads(
@@ -352,6 +358,7 @@ async def _recall_roundtrip(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     tea_key, ada_key, grace_key = tea["key"], ada_fact["key"], grace_fact["key"]
@@ -418,6 +425,7 @@ async def _recall_tome_scope(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     memory_key = stored["key"]
@@ -486,6 +494,7 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
             acl=["GM"],
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     memory_key = result["key"]
@@ -540,6 +549,7 @@ async def _supersede_relationship(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     memory_key = result["key"]
@@ -631,6 +641,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     membership_key = membership["key"]
@@ -644,6 +655,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     party_memory = json.loads(
@@ -655,6 +667,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             acl=["Party A"],
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     gm_memory = json.loads(
@@ -666,6 +679,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             acl=["GM"],
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     open_key, party_key, gm_key = open_memory["key"], party_memory["key"], gm_memory["key"]
@@ -738,6 +752,7 @@ async def _facet_recall(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     root_key = root["key"]
@@ -751,6 +766,7 @@ async def _facet_recall(backend: Backend) -> None:
             acl=["GM"],
             derived_from=root_key,
             tome=None,
+            occurred_at=None,
         )
     )
     facet_key = facet["key"]
@@ -837,6 +853,7 @@ async def _tome_scoping(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=tome,
+            occurred_at=None,
         )
     )
     memory_key = result["key"]
@@ -909,6 +926,7 @@ async def _recall_occurred_at_filter(backend: Backend) -> None:
             acl=None,
             derived_from=None,
             tome=None,
+            occurred_at=None,
         )
     )
     old_key, recent_key = old["key"], recent["key"]
