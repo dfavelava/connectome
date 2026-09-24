@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import copy
 
 import pytest
 
@@ -31,7 +32,8 @@ class FakeClient:
             raise RuntimeError("boom")
         words = set(query.lower().strip("?").split())
         hits = [key for key, text in self.tomes.get(tome, {}).items() if words & set(text.lower().split())]
-        return {"results": [{"key": key} for key in hits[:k]]}
+        # Mirrors the backend: search returns tome-scoped keys, remember bare ones.
+        return {"results": [{"key": f"tomes/{tome}/{key}"} for key in hits[:k]]}
 
     async def destroy_tome(self, tome, confirm=False):
         self.destroyed.append(tome)
@@ -59,8 +61,27 @@ def test_run_ingests_scores_and_destroys_tome(client):
     assert client.destroyed == ["temp-locomo-r1-conv-1"]
 
     assert [r.question for r in results] == ["When?", "Adversarial?"]
-    assert all(r.retrieved == () or set(r.retrieved) <= {"D1:1", "D1:2", "D2:1"} for r in results)
     assert skipped == {"no_evidence": 1, "unknown_evidence_only": 0, "unknown_evidence_ids": 0}
+
+
+def test_run_maps_tome_scoped_search_keys_back_to_dialog_ids(client):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
+    results, _ = asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r4"))
+    assert results[-1].retrieved == ("D2:1",)
+
+
+def test_run_fails_loudly_on_unmapped_search_keys(client):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
+
+    async def recall(query, k, tome):
+        return {"results": [{"key": "mem_from_somewhere_else.md"}]}
+
+    client.recall = recall
+    with pytest.raises(RuntimeError, match="not ingested"):
+        asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r5"))
+    assert client.destroyed == ["temp-locomo-r5-conv-1"]
 
 
 def test_run_destroys_tome_on_failure(client):
