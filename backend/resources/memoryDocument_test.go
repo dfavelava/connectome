@@ -35,6 +35,47 @@ func TestParseMemoryDocumentExtractsFrontmatterAndBody(t *testing.T) {
 	}
 }
 
+func TestMemoryFrontmatterOccurredAt(t *testing.T) {
+	t.Run("absent occurred_at is nil, not an error", func(t *testing.T) {
+		fm, _, ok := ParseMemoryDocument("---\ntype: note\n---\nbody\n")
+		if !ok {
+			t.Fatalf("expected ok=true")
+		}
+		occurredAt, err := fm.occurredAt()
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if occurredAt != nil {
+			t.Fatalf("expected nil occurredAt, got %v", *occurredAt)
+		}
+	})
+
+	t.Run("valid RFC3339 occurred_at is parsed", func(t *testing.T) {
+		fm, _, ok := ParseMemoryDocument("---\ntype: event\noccurred_at: \"2023-06-15T09:30:00Z\"\n---\nbody\n")
+		if !ok {
+			t.Fatalf("expected ok=true")
+		}
+		occurredAt, err := fm.occurredAt()
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		want := time.Date(2023, 6, 15, 9, 30, 0, 0, time.UTC)
+		if occurredAt == nil || !occurredAt.Equal(want) {
+			t.Fatalf("expected occurredAt %v, got %v", want, occurredAt)
+		}
+	})
+
+	t.Run("malformed occurred_at is an error, not silently dropped", func(t *testing.T) {
+		fm, _, ok := ParseMemoryDocument("---\ntype: event\noccurred_at: \"not-a-date\"\n---\nbody\n")
+		if !ok {
+			t.Fatalf("expected ok=true")
+		}
+		if _, err := fm.occurredAt(); err == nil {
+			t.Fatalf("expected an error for malformed occurred_at")
+		}
+	})
+}
+
 func TestParseMemoryDocumentACLPresenceIsDistinguishable(t *testing.T) {
 	withACL := "---\ntype: note\nacl: [\"GM\"]\n---\nbody\n"
 	fm, _, ok := ParseMemoryDocument(withACL)

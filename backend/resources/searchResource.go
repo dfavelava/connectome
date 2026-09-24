@@ -33,10 +33,16 @@ type SearchResourceImpl struct {
 }
 
 type SearchFiltersRequest struct {
-	Type   *string    `json:"type,omitempty"`
-	Entity *string    `json:"entity,omitempty"`
-	Since  *time.Time `json:"since,omitempty"`
-	Until  *time.Time `json:"until,omitempty"`
+	Type   *string `json:"type,omitempty"`
+	Entity *string `json:"entity,omitempty"`
+	// Since and Until bound created_at - when the memory was written.
+	Since *time.Time `json:"since,omitempty"`
+	Until *time.Time `json:"until,omitempty"`
+	// OccurredSince and OccurredUntil bound occurred_at - when the described
+	// event happened. Memories with no occurred_at are excluded whenever
+	// either is set.
+	OccurredSince *time.Time `json:"occurred_since,omitempty"`
+	OccurredUntil *time.Time `json:"occurred_until,omitempty"`
 	// Tome restricts results to this tome id. Omitted/nil searches
 	// DefaultTome, matching search behavior from before tomes existed.
 	Tome *string `json:"tome,omitempty"`
@@ -108,6 +114,8 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		filters.Entity = req.Filters.Entity
 		filters.Since = req.Filters.Since
 		filters.Until = req.Filters.Until
+		filters.OccurredSince = req.Filters.OccurredSince
+		filters.OccurredUntil = req.Filters.OccurredUntil
 		if req.Filters.Tome != nil {
 			filters.TomeID = *req.Filters.Tome
 		}

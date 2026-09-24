@@ -60,6 +60,23 @@ def entity_key(entity_id: str) -> str:
     return f"ent_{entity_id}.json"
 
 
+def validate_occurred_at(occurred_at: str | None) -> None:
+    """Raise ValueError if occurred_at is present but not RFC3339.
+
+    Mirrors connectomemcp.server.validate_occurred_at. Unlike created_at
+    (which the backend silently falls back to `now` for on a parse failure -
+    see createdAtOrNow in backend/resources/memoryDocument.go), a malformed
+    occurred_at is rejected outright here rather than silently dropped or
+    reinterpreted as created_at.
+    """
+    if occurred_at is None:
+        return
+    try:
+        _ = datetime.fromisoformat(occurred_at)
+    except ValueError as exc:
+        raise ValueError(f"invalid occurred_at {occurred_at!r} (want RFC3339): {exc}") from exc
+
+
 class ConnectomeClient:
     """Minimal async HTTP client for the connectome backend's /api/connectome routes.
 
@@ -129,12 +146,18 @@ class ConnectomeClient:
         relationships: list[Relationship] | None = None,
         acl: list[str] | None = None,
         tome: str | None = None,
+        occurred_at: str | None = None,
     ) -> dict[str, str]:
         """Write a memory document and return its key.
 
         tome scopes the memory to its own namespace; it must match the tome
         passed to any later get_memory/forget of this key. Omit for the
-        default tome."""
+        default tome.
+
+        occurred_at is an optional RFC3339 timestamp for when the memory's
+        described event actually happened, distinct from created_at (always
+        now). Omit when the event time is unknown or is simply now."""
+        validate_occurred_at(occurred_at)
         memory_id = f"mem_{uuid.uuid4()}.md"
         now = datetime.now(UTC).isoformat()
         metadata: dict[str, object] = {
@@ -142,6 +165,7 @@ class ConnectomeClient:
             "id": memory_id,
             "type": memory_type,
             "created_at": now,
+            "occurred_at": occurred_at,
             "source": {"type": self.source_type, "created_at": now},
             "entities": list(entities or []),
             "relationships": [dict(relationship) for relationship in (relationships or [])],
@@ -167,13 +191,19 @@ class ConnectomeClient:
         entity: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        occurred_since: str | None = None,
+        occurred_until: str | None = None,
         hydrate: bool = False,
         as_: str | None = None,
         tome: str | None = None,
     ) -> dict[str, object]:
         """Search memory by semantic similarity to query and return ranked results.
 
-        tome restricts results to that tome; omit to search the default tome."""
+        tome restricts results to that tome; omit to search the default tome.
+
+        occurred_since/occurred_until bound occurred_at (when the described
+        event happened), distinct from since/until (which bound created_at).
+        Memories with no occurred_at are excluded whenever either is set."""
         filters: dict[str, str] = {}
         if memory_type is not None:
             filters["type"] = memory_type
@@ -183,6 +213,10 @@ class ConnectomeClient:
             filters["since"] = since
         if until is not None:
             filters["until"] = until
+        if occurred_since is not None:
+            filters["occurred_since"] = occurred_since
+        if occurred_until is not None:
+            filters["occurred_until"] = occurred_until
         if tome is not None:
             filters["tome"] = tome
 

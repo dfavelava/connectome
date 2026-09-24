@@ -97,6 +97,9 @@ class MemoryMetadata(BaseModel):
     id: str | None = None
     type: str
     created_at: str
+    # When the described event happened, distinct from created_at (when this
+    # record was written). None means unknown - see validate_occurred_at.
+    occurred_at: str | None = None
 
     source: MemorySource
     entities: list[str] = Field(default_factory=list)
@@ -147,6 +150,23 @@ def build_url(path: str) -> str:
 def generate_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4()}"
 
+
+def validate_occurred_at(occurred_at: str | None) -> None:
+    """Raise ValueError if occurred_at is present but not RFC3339.
+
+    Unlike created_at (which the backend silently falls back to `now` for on
+    a parse failure - see createdAtOrNow in
+    backend/resources/memoryDocument.go), a malformed occurred_at is rejected
+    outright here: silently dropping or replacing it would reintroduce the
+    created_at/occurred_at conflation this field exists to avoid.
+    """
+    if occurred_at is None:
+        return
+    try:
+        _ = datetime.fromisoformat(occurred_at)
+    except ValueError as exc:
+        raise ValueError(f"invalid occurred_at {occurred_at!r} (want RFC3339): {exc}") from exc
+
 def format_memory(
     id: str,
     content: str,
@@ -156,11 +176,14 @@ def format_memory(
     memory_type: str = DEFAULT_MEMORY_TYPE,
     acl: list[str] | None = None,
     derived_from: str | None = None,
+    occurred_at: str | None = None,
 ) -> tuple[str, dict[str, object]]:
+    validate_occurred_at(occurred_at)
     metadata = MemoryMetadata(
         id=id,
         type=memory_type,
         created_at=created_at,
+        occurred_at=occurred_at,
         source=MemorySource(type=MEMORY_SOURCE_TYPE, created_at=created_at),
         entities=[entity.id for entity in entities],
         relationships=relationships,
@@ -304,6 +327,7 @@ async def remember(
     acl: list[str] | None = Field(default=None, description="Access-control list (entity/group ids) restricting who can access this memory. Omit to apply this Connectome instance's configured default ACL policy (unrestricted if the instance has none configured)."),
     derived_from: str | None = Field(default=None, description="The id of another memory (e.g. 'mem_abc.md') this one is a facet of. A facet is an ordinary memory - stored, chunked, embedded, and ACL-filtered exactly like any other - that happens to record one entity's own version of the root memory's content. Use derived_from when the facet's *content* diverges from the root (a character's private take on a shared event, a rumor vs. the settled fact); if the audience is merely narrower but the content agrees with the root, just tighten the root memory's own acl instead of creating a facet."),
     tome: str | None = Field(default=None, description="Scope this memory and its entity records to this tome id, storing them in their own namespace. Omit to use the default tome."),
+    occurred_at: str | None = Field(default=None, description="RFC3339 timestamp for when the memory's described event actually happened, if known and different from now (e.g. an imported or backdated memory). Distinct from created_at, which always records when this record was written. Omit when the event time is unknown or is simply now."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -322,6 +346,7 @@ async def remember(
         memory_type,
         acl,
         derived_from,
+        occurred_at,
     )
 
     # Merge member_of onto its subject entity record via the shared backend
@@ -407,6 +432,8 @@ async def recall(
     entity: str | None = Field(default=None, description="Restrict results to memories mentioning this entity id."),
     since: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or after this time."),
     until: str | None = Field(default=None, description="ISO-8601 timestamp; only include memories created at or before this time."),
+    occurred_since: str | None = Field(default=None, description="RFC3339 timestamp; only include memories whose occurred_at (when the described event happened, distinct from created_at) is at or after this time. Memories with no occurred_at are excluded, not treated as a match."),
+    occurred_until: str | None = Field(default=None, description="RFC3339 timestamp; only include memories whose occurred_at is at or before this time. Memories with no occurred_at are excluded, not treated as a match."),
     hydrate: bool = Field(default=False, description="Return each result's full memory body instead of a short snippet."),
     as_: str | None = Field(default=None, validation_alias="as", description="Restrict results to memories visible to this entity id: its acl must be empty (unrestricted) or contain the id directly or a group it is member_of (one level, no recursion). Omit for unrestricted access."),
     tome: str | None = Field(default=None, description="Restrict results to this tome id. Omit to search the default tome."),
@@ -421,6 +448,10 @@ async def recall(
         filters["since"] = since
     if until is not None:
         filters["until"] = until
+    if occurred_since is not None:
+        filters["occurred_since"] = occurred_since
+    if occurred_until is not None:
+        filters["occurred_until"] = occurred_until
     if tome is not None:
         filters["tome"] = tome
 

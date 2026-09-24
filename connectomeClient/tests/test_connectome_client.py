@@ -176,6 +176,55 @@ async def test_remember_includes_acl_when_given(patch_async_client):
     assert metadata["acl"] == ["GM"]
 
 
+async def test_remember_writes_null_occurred_at_when_not_given(patch_async_client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"message": "success"})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    _ = await client.remember("hello")
+
+    body = captured["request"].content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    frontmatter_yaml = document.split("---\n", 2)[1]
+    metadata = yaml.safe_load(frontmatter_yaml)
+
+    assert metadata["occurred_at"] is None
+
+
+async def test_remember_writes_explicit_occurred_at(patch_async_client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"message": "success"})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    occurred_at = "2023-06-15T09:30:00+00:00"
+    _ = await client.remember("hello", occurred_at=occurred_at)
+
+    body = captured["request"].content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    frontmatter_yaml, content = document.split("---\n", 2)[1:]
+    metadata = yaml.safe_load(frontmatter_yaml)
+
+    assert metadata["occurred_at"] == occurred_at
+    assert metadata["created_at"] != occurred_at
+    assert content.strip("\n") == "hello"
+
+
+async def test_remember_rejects_malformed_occurred_at(patch_async_client):
+    client = make_client()
+    with pytest.raises(ValueError, match="occurred_at"):
+        _ = await client.remember("hello", occurred_at="not-a-date")
+
+
 async def test_recall_sends_query_and_filters(patch_async_client):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"results": []})
@@ -196,6 +245,29 @@ async def test_recall_sends_query_and_filters(patch_async_client):
         "filters": {"entity": "david"},
     }
     assert result == {"results": []}
+
+
+async def test_recall_sends_occurred_since_and_occurred_until_distinct_from_since_until(patch_async_client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": []})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    _ = await client.recall(
+        "what happened",
+        since="2020-01-01T00:00:00Z",
+        occurred_since="1999-01-01T00:00:00Z",
+        occurred_until="1999-12-31T00:00:00Z",
+    )
+
+    request = last_request(patch_async_client)
+    body = json.loads(request.content)
+    assert body["filters"] == {
+        "since": "2020-01-01T00:00:00Z",
+        "occurred_since": "1999-01-01T00:00:00Z",
+        "occurred_until": "1999-12-31T00:00:00Z",
+    }
 
 
 async def test_assert_relationship_posts_subject_predicate_object(patch_async_client):

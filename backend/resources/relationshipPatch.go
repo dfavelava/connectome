@@ -41,10 +41,16 @@ type memorySourceDocument struct {
 // extracts what indexing needs - this round-trips every field so a patch can
 // rewrite the document without dropping anything.
 type fullMemoryFrontmatter struct {
-	Version       string                 `yaml:"version"`
-	ID            string                 `yaml:"id"`
-	Type          string                 `yaml:"type"`
-	CreatedAt     string                 `yaml:"created_at"`
+	Version   string `yaml:"version"`
+	ID        string `yaml:"id"`
+	Type      string `yaml:"type"`
+	CreatedAt string `yaml:"created_at"`
+	// OccurredAt is omitempty so a document that never had the key (the
+	// common case - it's optional) round-trips without one, rather than
+	// gaining an `occurred_at: ""` line. Preserving it matters: hydrate and
+	// relationship patches rewrite frontmatter through this struct, and would
+	// otherwise drop the field.
+	OccurredAt    string                 `yaml:"occurred_at,omitempty"`
 	Source        memorySourceDocument   `yaml:"source"`
 	Entities      []string               `yaml:"entities"`
 	Relationships []relationshipDocument `yaml:"relationships"`
