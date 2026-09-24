@@ -117,29 +117,46 @@ async def destroy(client: ConnectomeClient, tome: str) -> None:
         print(f"warning: failed to destroy tome {tome}: {exc}", file=sys.stderr)
 
 
-async def run(client: ConnectomeClient, args: argparse.Namespace, samples: list[Sample], run_id: str) -> tuple[list[QuestionResult], dict[str, int]]:
+async def run(
+    client: ConnectomeClient,
+    args: argparse.Namespace,
+    samples: list[Sample],
+    run_id: str,
+    key_maps: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[QuestionResult], dict[str, int], dict[str, dict[str, str]]]:
+    """Ingest, score, and destroy each sample's tome, returning the results,
+    skip counts, and each sample's key -> dia_id map.
+
+    Given key_maps (from an earlier --keep-tomes run named run_id), ingestion
+    is skipped and that run's tomes are queried and left in place instead.
+    """
     k = max(args.ks)
+    reuse = key_maps is not None
+    key_maps = dict(key_maps or {})
     results: list[QuestionResult] = []
     skipped: dict[str, int] = {}
     for sample in samples:
         tome = tome_for(run_id, sample.sample_id)
         started = time.monotonic()
         try:
-            key_to_dia = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
+            if reuse:
+                key_to_dia = key_maps[sample.sample_id]
+            else:
+                key_to_dia = key_maps[sample.sample_id] = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
             ingested = time.monotonic()
             sample_results, sample_skipped = await query(client, sample, tome, key_to_dia, k, args.concurrency)
         finally:
-            if not args.keep_tomes:
+            if not args.keep_tomes and not reuse:
                 await destroy(client, tome)
         results.extend(sample_results)
         for reason, count in sample_skipped.items():
             skipped[reason] = skipped.get(reason, 0) + count
         print(
-            f"{sample.sample_id}: {len(sample.turns)} turns ingested in {ingested - started:.1f}s, "
+            f"{sample.sample_id}: {len(sample.turns)} turns {'reused' if reuse else f'ingested in {ingested - started:.1f}s'}, "
             f"{len(sample_results)} questions scored in {time.monotonic() - ingested:.1f}s",
             file=sys.stderr,
         )
-    return results, skipped
+    return results, skipped, key_maps
 
 
 async def cleanup(client: ConnectomeClient, samples: list[Sample], run_id: str) -> None:
@@ -166,7 +183,9 @@ def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list
             "vector_weight": _float_env("SEARCH_VECTOR_WEIGHT", 0.6),
             "text_weight": _float_env("SEARCH_TEXT_WEIGHT", 0.4),
             "rrf_k": _float_env("SEARCH_RRF_K", 60),
+            "text_query": os.environ.get("SEARCH_TEXT_QUERY") or "plain",
         },
+        "reused_tomes": args.reuse_tomes,
         "embedding_model": args.embedding_model,
         "chunking": {
             "unit": "one memory per dialog turn",
@@ -197,6 +216,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--embedding-model", default="nomic-embed-text", help="recorded in the run config only (default: %(default)s)")
     parser.add_argument("--no-occurred-at", action="store_true", help="don't set occurred_at; the session date stays in the memory text")
     parser.add_argument("--keep-tomes", action="store_true", help="don't destroy tomes afterwards (for debugging; clean up with --cleanup)")
+    parser.add_argument(
+        "--reuse-tomes",
+        metavar="RUN_ID",
+        help="query the tomes an earlier --keep-tomes run left behind instead of ingesting (for comparing backend search settings on one index)",
+    )
     parser.add_argument("--cleanup", metavar="RUN_ID", help="destroy the tomes left behind by RUN_ID and exit")
     return parser.parse_args(argv)
 
@@ -221,13 +245,27 @@ def main(argv: list[str] | None = None) -> None:
 
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dt%H%M%Sz")
     config = run_config(client, args, samples, run_id)
+    tome_run_id, key_maps = run_id, None
+    if args.reuse_tomes:
+        tome_run_id = args.reuse_tomes
+        key_maps_path = args.results_dir / f"{tome_run_id}.keys.json"
+        if not key_maps_path.exists():
+            sys.exit(f"no key map at {key_maps_path}; --reuse-tomes needs a run made with --keep-tomes")
+        key_maps = json.loads(key_maps_path.read_text(encoding="utf-8"))
+        if missing := [s.sample_id for s in samples if s.sample_id not in key_maps]:
+            sys.exit(f"run {tome_run_id} did not ingest: {', '.join(missing)}")
     try:
-        results, skipped = asyncio.run(run(client, args, samples, run_id))
+        results, skipped, key_maps = asyncio.run(run(client, args, samples, tome_run_id, key_maps))
     except httpx.HTTPError as exc:
         sys.exit(f"request to {config['base_url']} failed: {exc!r}")
     summary = summarize(results, args.ks)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
+    if args.keep_tomes and not args.reuse_tomes:
+        # Memory keys are random, so a later --reuse-tomes run needs this map
+        # to score the kept tomes.
+        with (args.results_dir / f"{run_id}.keys.json").open("w", encoding="utf-8") as f:
+            json.dump(key_maps, f, indent=2)
     out_path = args.results_dir / f"{run_id}.json"
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(

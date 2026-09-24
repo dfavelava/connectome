@@ -26,6 +26,22 @@ func TestHybridWeightsFromEnvIgnoresUnparsableValues(t *testing.T) {
 	}
 }
 
+func TestTextQueryModeFromEnv(t *testing.T) {
+	if got := TextQueryModeFromEnv(); got != TextQueryPlain {
+		t.Fatalf("expected plain with SEARCH_TEXT_QUERY unset, got %q", got)
+	}
+
+	t.Setenv("SEARCH_TEXT_QUERY", "or")
+	if got := TextQueryModeFromEnv(); got != TextQueryOr {
+		t.Fatalf("expected or, got %q", got)
+	}
+
+	t.Setenv("SEARCH_TEXT_QUERY", "fuzzy")
+	if got := TextQueryModeFromEnv(); got != TextQueryPlain {
+		t.Fatalf("expected an unknown mode to fall back to plain, got %q", got)
+	}
+}
+
 // TestFuseWeightsAreConfigurable exercises fuse (the in-memory RRF blend)
 // directly, without a database, to pin down that a weight of zero for one
 // signal makes it stop influencing ranking entirely - the mechanism the
