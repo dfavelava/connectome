@@ -209,6 +209,7 @@ of the request/formatting logic. See [`connectomeClient/README.md`](connectomeCl
 - `backend/` — Go API, storage managers, authentication, and Ollama integration
 - `connectomeMCP/` — Python MCP server and client-side memory formatting
 - `connectomeClient/` — Python HTTP client library for applications that talk to Connectome directly (not via MCP)
+- `evals/locomo/` — LoCoMo retrieval-recall eval harness (evidence recall@k per question category); see [`evals/locomo/README.md`](evals/locomo/README.md)
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
 - `.connectome/` — local memory volume used by the local storage manager
 
