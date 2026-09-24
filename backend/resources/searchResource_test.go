@@ -24,11 +24,13 @@ import (
 type fakeSearchIndex struct {
 	hits []daos.SearchHit
 
-	gotK       int
-	gotFilters daos.SearchFilters
+	gotEmbedding []float32
+	gotK         int
+	gotFilters   daos.SearchFilters
 }
 
-func (f *fakeSearchIndex) Search(_ context.Context, _ string, _ []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error) {
+func (f *fakeSearchIndex) Search(_ context.Context, _ string, queryEmbedding []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error) {
+	f.gotEmbedding = queryEmbedding
 	f.gotK = k
 	f.gotFilters = filters
 	return f.hits, nil
@@ -125,6 +127,9 @@ func TestSearchReturnsRankedSnippets(t *testing.T) {
 
 	if index.gotK != 3 {
 		t.Fatalf("expected k=3 forwarded to the index, got %d", index.gotK)
+	}
+	if len(index.gotEmbedding) != 2 || index.gotEmbedding[1] != fakeQuerySide {
+		t.Fatalf("expected the query to be embedded as a query, got %v", index.gotEmbedding)
 	}
 	if index.gotFilters.Type == nil || *index.gotFilters.Type != "preference" {
 		t.Fatalf("expected type filter 'preference' forwarded, got %v", index.gotFilters.Type)

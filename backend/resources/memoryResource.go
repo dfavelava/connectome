@@ -27,10 +27,12 @@ const (
 	memoryChunkOverlapWords = 50
 )
 
-// Embedder produces a vector embedding for a chunk of text. Satisfied by
-// *managers.OllamaManager.
+// Embedder produces vector embeddings for text. Stored chunks and search
+// queries are embedded differently (see managers.DocumentPrefix), so callers
+// must pick the side they're on. Satisfied by *managers.OllamaManager.
 type Embedder interface {
-	Embed(input string) ([]float32, error)
+	EmbedDocument(input string) ([]float32, error)
+	EmbedQuery(input string) ([]float32, error)
 }
 
 // EmbeddingsIndexer is the subset of *daos.EmbeddingsDao that memoryResource
@@ -209,7 +211,7 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 	createdAt := fm.createdAtOrNow()
 	acl := ResolveACL(fm.ACL)
 	for i, chunk := range chunks {
-		embedding, err := resource.embedder.Embed(chunk)
+		embedding, err := resource.embedder.EmbedDocument(chunk)
 		if err != nil {
 			return fmt.Errorf("embed chunk %d of %s: %w", i, key, err)
 		}

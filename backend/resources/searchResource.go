@@ -102,7 +102,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		k = maxSearchK
 	}
 
-	queryEmbedding, err := resource.embedder.Embed(req.Query)
+	queryEmbedding, err := resource.embedder.EmbedQuery(req.Query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("embed query: %v", err)})
 		return

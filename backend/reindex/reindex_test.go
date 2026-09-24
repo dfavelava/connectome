@@ -49,11 +49,17 @@ func (m *fakeManager) ListObjects(string) (*managers.MemoryListResult, error) {
 }
 
 // fakeEmbedder stands in for *managers.OllamaManager: a cheap, deterministic
-// embedding plus a call counter so dry-run tests can assert it was skipped.
-type fakeEmbedder struct{ calls int }
+// embedding plus call counters so dry-run tests can assert it was skipped and
+// rebuild tests can assert memories are embedded as documents, not queries.
+type fakeEmbedder struct{ calls, queryCalls int }
 
-func (f *fakeEmbedder) Embed(input string) ([]float32, error) {
+func (f *fakeEmbedder) EmbedDocument(input string) ([]float32, error) {
 	f.calls++
+	return []float32{float32(len(input))}, nil
+}
+
+func (f *fakeEmbedder) EmbedQuery(input string) ([]float32, error) {
+	f.queryCalls++
 	return []float32{float32(len(input))}, nil
 }
 
@@ -121,6 +127,9 @@ func TestRunRebuildsFromBlobStore(t *testing.T) {
 	}
 	if embedder.calls == 0 {
 		t.Fatalf("expected the embedder to be called for indexable memories")
+	}
+	if embedder.queryCalls != 0 {
+		t.Fatalf("expected memories to be embedded as documents, got %d query embeds", embedder.queryCalls)
 	}
 }
 

@@ -24,11 +24,22 @@ import (
 const testToken = "e2e-test-token"
 
 // fakeEmbedder stands in for *managers.OllamaManager in tests: it returns a
-// deterministic, cheap embedding without needing a real Ollama server.
+// deterministic, cheap embedding without needing a real Ollama server. The
+// second component marks which side embedded it (fakeDocumentSide or
+// fakeQuerySide), so tests can assert documents and queries aren't mixed up.
 type fakeEmbedder struct{}
 
-func (fakeEmbedder) Embed(input string) ([]float32, error) {
-	return []float32{float32(len(input))}, nil
+const (
+	fakeDocumentSide float32 = 0
+	fakeQuerySide    float32 = 1
+)
+
+func (fakeEmbedder) EmbedDocument(input string) ([]float32, error) {
+	return []float32{float32(len(input)), fakeDocumentSide}, nil
+}
+
+func (fakeEmbedder) EmbedQuery(input string) ([]float32, error) {
+	return []float32{float32(len(input)), fakeQuerySide}, nil
 }
 
 // fakeIndexer stands in for *daos.EmbeddingsDao in tests: it records rows
@@ -562,6 +573,9 @@ func TestMemoryWriteIndexesRewriteSupersedesDeleteRemoves(t *testing.T) {
 		}
 		if row.Dim == 0 || len(row.Embedding) != row.Dim {
 			t.Fatalf("expected a non-empty embedding matching dim, got %v (dim %d)", row.Embedding, row.Dim)
+		}
+		if row.Embedding[1] != fakeDocumentSide {
+			t.Fatalf("expected chunk %d to be embedded as a document, got %v", i, row.Embedding)
 		}
 		if strings.TrimSpace(row.ChunkText) == "" {
 			t.Fatalf("expected chunk text to be populated for full-text search, got %q", row.ChunkText)
