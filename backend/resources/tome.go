@@ -29,6 +29,14 @@ func TomeScopedKey(tome, key string) string {
 	return tomeKeyPrefix + tome + "/" + key
 }
 
+// TomeUnscopedKey is TomeScopedKey's inverse: it strips tome's prefix off a
+// blob store key, returning the bare key callers address memories by
+// alongside a tome argument. Keys that aren't under tome's prefix (and every
+// key for the default tome) come back unchanged.
+func TomeUnscopedKey(tome, scopedKey string) string {
+	return strings.TrimPrefix(scopedKey, tomeListPrefix(tome))
+}
+
 // tomeListPrefix returns the blob key prefix that scopes ListObjects to
 // tome: empty for the default tome (ListObjects("") lists every tome's
 // keys, so this alone isn't exclusive - see ListTome), or tomes/<tome>/
@@ -44,14 +52,20 @@ func tomeListPrefix(tome string) string {
 // tomes/<tome>/ for a non-default tome, or every object that ISN'T under any
 // tomes/ prefix for the default tome. The default case needs the extra
 // filter because ListObjects("") returns every tome's keys, not just the
-// unprefixed ones TomeScopedKey uses for DefaultTome.
+// unprefixed ones TomeScopedKey uses for DefaultTome. Keys come back bare
+// (see TomeUnscopedKey), the same shape read/delete take with a tome.
 func ListTome(manager managers.MemoryManager, tome string) (*managers.MemoryListResult, error) {
 	result, err := manager.ListObjects(tomeListPrefix(tome))
 	if err != nil {
 		return nil, err
 	}
 	if tome != DefaultTome {
-		return result, nil
+		contents := make([]managers.MemoryListItem, len(result.Contents))
+		for i, item := range result.Contents {
+			item.Key = TomeUnscopedKey(tome, item.Key)
+			contents[i] = item
+		}
+		return &managers.MemoryListResult{Contents: contents}, nil
 	}
 
 	contents := make([]managers.MemoryListItem, 0, len(result.Contents))

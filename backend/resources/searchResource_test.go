@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,7 +51,11 @@ func newSearchTestServer(t *testing.T, hits []daos.SearchHit, seed map[string]st
 		t.Fatalf("create connectome dir: %v", err)
 	}
 	for key, content := range seed {
-		if err := os.WriteFile(filepath.Join(connectomeDir, key), []byte(content), 0o644); err != nil {
+		path := filepath.Join(connectomeDir, key)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create dir for %s: %v", key, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatalf("seed %s: %v", key, err)
 		}
 	}
@@ -348,6 +353,42 @@ func TestSearchWithTomeFilterScopesToThatTome(t *testing.T) {
 
 	if got := index.gotFilters.TomeID; got != "west-marches" {
 		t.Fatalf("expected TomeID %q, got %q", "west-marches", got)
+	}
+}
+
+func TestSearchWithTomeFilterReturnsBareKeys(t *testing.T) {
+	const tome = "west-marches"
+	scopedKey := TomeScopedKey(tome, "mem_tome.md")
+	content := memoryDocument("note", "a body in its own tome", nil)
+
+	for _, hydrate := range []bool{false, true} {
+		srv, _ := newSearchTestServer(t, []daos.SearchHit{
+			{MemoryKey: scopedKey, ChunkIndex: 0, Type: "note", Score: 0.9},
+		}, map[string]string{scopedKey: content})
+
+		body := fmt.Sprintf(`{"query":"anything","hydrate":%t,"filters":{"tome":%q}}`, hydrate, tome)
+		resp, payload := doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search",
+			strings.NewReader(body), map[string]string{"Content-Type": "application/json"})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("hydrate=%t: expected 200, got %d (%s)", hydrate, resp.StatusCode, payload)
+		}
+
+		var decoded struct {
+			Results []SearchResult `json:"results"`
+		}
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("decode %q: %v", payload, err)
+		}
+		if len(decoded.Results) != 1 {
+			t.Fatalf("hydrate=%t: expected 1 result, got %d", hydrate, len(decoded.Results))
+		}
+		result := decoded.Results[0]
+		if result.Key != "mem_tome.md" {
+			t.Fatalf("hydrate=%t: expected bare key mem_tome.md, got %q", hydrate, result.Key)
+		}
+		if result.Snippet == "" && result.Content == "" {
+			t.Fatalf("hydrate=%t: expected the scoped blob to still resolve, got %+v", hydrate, result)
+		}
 	}
 }
 

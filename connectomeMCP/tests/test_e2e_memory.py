@@ -838,6 +838,7 @@ async def _tome_scoping(backend: Backend) -> None:
         browse_all,
         forget,
         get_memory,
+        recall,
         remember,
     )
 
@@ -880,16 +881,23 @@ async def _tome_scoping(backend: Backend) -> None:
         with pytest.raises(httpx.HTTPStatusError):
             await get_memory("ent_ada.json", tome=None)
 
-        # --- browse_all lists the tome's own scoped keys, not the raw ones --
-        scoped_key = f"tomes/{tome}/{memory_key}"
-        scoped_keys = {item["key"] for item in json.loads(await browse_all(tome=tome))["keys"]}
-        assert scoped_key in scoped_keys
-        assert f"tomes/{tome}/ent_ada.json" in scoped_keys
-        assert f"tomes/{tome}/ent_cartographers.json" in scoped_keys
+        # --- browse_all lists the tome's keys bare, the same shape remember -
+        # --- returned, so each one reads straight back with the same tome ---
+        tome_keys = {item["key"] for item in json.loads(await browse_all(tome=tome))["keys"]}
+        assert {memory_key, "ent_ada.json", "ent_cartographers.json"} <= tome_keys
+        for key in tome_keys:
+            await get_memory(key, tome=tome)
+
+        # --- recall returns the same bare key, which reads back with the tome
+        recalled = json.loads(
+            await recall(query="Ada charts the ruins", k=5, memory_type=None, entity=None, since=None, until=None, occurred_since=None, occurred_until=None, hydrate=False, as_=None, tome=tome)
+        )["results"]
+        assert memory_key in {r["key"] for r in recalled}
+        assert "West Marches" in json.loads(await get_memory(memory_key, tome=tome))["content"]
 
         # --- and stays invisible to a browse_all of the default tome --------
         default_keys = {item["key"] for item in json.loads(await browse_all(tome=None))["keys"]}
-        assert scoped_key not in default_keys
+        assert f"tomes/{tome}/{memory_key}" not in default_keys
         assert memory_key not in default_keys
     finally:
         await forget(memory_key, tome=tome)

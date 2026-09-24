@@ -28,6 +28,17 @@ func TestTomeScopedKeyPrefixesNonDefaultTome(t *testing.T) {
 	}
 }
 
+func TestTomeUnscopedKeyInvertsTomeScopedKey(t *testing.T) {
+	for _, tome := range []string{DefaultTome, "west-marches"} {
+		if got := TomeUnscopedKey(tome, TomeScopedKey(tome, "mem_abc.md")); got != "mem_abc.md" {
+			t.Fatalf("tome %q: expected mem_abc.md, got %q", tome, got)
+		}
+	}
+	if got := TomeUnscopedKey("west-marches", "tomes/other-tome/mem_abc.md"); got != "tomes/other-tome/mem_abc.md" {
+		t.Fatalf("expected another tome's key unchanged, got %q", got)
+	}
+}
+
 func TestCheckTomeDestroyAllowedRefusesDefaultTomeEvenWithConfirm(t *testing.T) {
 	if err := checkTomeDestroyAllowed(DefaultTome, false); !errors.Is(err, ErrDestroyDefaultTome) {
 		t.Fatalf("expected ErrDestroyDefaultTome without confirm, got %v", err)
@@ -174,8 +185,8 @@ func TestListTomeScopesToTomePrefix(t *testing.T) {
 		t.Fatalf("ListTome: %v", err)
 	}
 
-	if len(result.Contents) != 1 || result.Contents[0].Key != "tomes/west-marches/mem_b.md" {
-		t.Fatalf("expected only tomes/west-marches/mem_b.md, got %+v", result.Contents)
+	if len(result.Contents) != 1 || result.Contents[0].Key != "mem_b.md" {
+		t.Fatalf("expected only west-marches' mem_b.md as a bare key, got %+v", result.Contents)
 	}
 }
 

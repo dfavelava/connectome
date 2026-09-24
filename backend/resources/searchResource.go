@@ -134,6 +134,11 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 	if req.Hydrate {
 		results = resource.hydrateResults(hits)
 	}
+	// hit.MemoryKey is the tome-scoped blob key; return the bare key so a
+	// result can be passed straight back to read/delete with the same tome.
+	for i := range results {
+		results[i].Key = TomeUnscopedKey(filters.TomeID, results[i].Key)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
