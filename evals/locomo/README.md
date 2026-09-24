@@ -65,6 +65,10 @@ Useful flags (`uv run locomo-eval --help` for all):
 - `--run-id NAME` - fixed tome/result name instead of a timestamp.
 - `--no-occurred-at` - leave `occurred_at` unset; the date stays in the text.
 - `--concurrency N` - in-flight requests during ingestion and querying.
+- `--keep-tomes` - leave the tomes in place and write
+  `results/<run-id>.keys.json` (the memory key -> dialog id map).
+- `--reuse-tomes RUN_ID` - skip ingestion and query the tomes a `--keep-tomes`
+  run left behind (see below).
 
 Ingestion embeds each turn, so a full run (~5,900 turns, ~1,980 scored
 questions) takes a while on CPU-only Ollama; `--samples` is the quick loop.
@@ -81,6 +85,21 @@ result config (unset values are recorded as the backend defaults):
 ```bash
 SEARCH_TEXT_WEIGHT=0 uv run locomo-eval --run-id vector-only
 ```
+
+### Comparing search settings on one index
+
+Search settings only affect querying, so ingest once and re-query the same
+tomes after restarting the backend with each setting:
+
+```bash
+uv run locomo-eval --run-id base --keep-tomes
+# restart the backend with SEARCH_TEXT_QUERY=or, then:
+SEARCH_TEXT_QUERY=or uv run locomo-eval --run-id text-or --reuse-tomes base
+uv run locomo-eval --cleanup base
+```
+
+As with the weights, `SEARCH_TEXT_QUERY` is recorded from the harness's
+environment, so export the value the backend is running with.
 
 ### Cleanup and reproducibility
 

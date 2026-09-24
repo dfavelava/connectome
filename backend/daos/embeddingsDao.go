@@ -43,12 +43,13 @@ type NearestNeighbor struct {
 }
 
 type EmbeddingsDao struct {
-	pool    *pgxpool.Pool
-	weights HybridWeights
+	pool      *pgxpool.Pool
+	weights   HybridWeights
+	textQuery TextQueryMode
 }
 
 func NewEmbeddingsDao(pool *pgxpool.Pool) *EmbeddingsDao {
-	return &EmbeddingsDao{pool: pool, weights: HybridWeightsFromEnv()}
+	return &EmbeddingsDao{pool: pool, weights: HybridWeightsFromEnv(), textQuery: TextQueryModeFromEnv()}
 }
 
 // InsertEmbeddings stores one row per chunk under memoryKey. It does not
@@ -279,20 +280,74 @@ func (dao *EmbeddingsDao) vectorCandidates(ctx context.Context, query []float32,
 	return scanCandidates(rows)
 }
 
+// TextQueryMode selects how Search's full-text leg turns the query text into
+// a tsquery. Question-shaped queries rarely contain every one of their terms
+// in a short memory, so the AND-of-terms modes often match nothing and leave
+// ranking to the vector leg alone - see issue #8.
+type TextQueryMode string
+
+const (
+	// TextQueryPlain is plainto_tsquery: every non-stopword term must match
+	// (AND). The default.
+	TextQueryPlain TextQueryMode = "plain"
+	// TextQueryWebsearch is websearch_to_tsquery: AND of terms like plain,
+	// but honoring "quoted phrases", OR, and -negation in the query text.
+	TextQueryWebsearch TextQueryMode = "websearch"
+	// TextQueryOr matches a chunk containing any of plainto_tsquery's terms
+	// (its & operators rewritten to |), ranked by ts_rank, which favors
+	// chunks matching more of them.
+	TextQueryOr TextQueryMode = "or"
+	// TextQueryAndOr matches like TextQueryOr but ranks every chunk that
+	// satisfies the full AND query above the OR-only matches.
+	TextQueryAndOr TextQueryMode = "and_or"
+)
+
+// TextQueryModeFromEnv reads SEARCH_TEXT_QUERY, falling back to
+// TextQueryPlain when it is unset or not a known mode.
+func TextQueryModeFromEnv() TextQueryMode {
+	switch mode := TextQueryMode(os.Getenv("SEARCH_TEXT_QUERY")); mode {
+	case TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr:
+		return mode
+	default:
+		return TextQueryPlain
+	}
+}
+
+// textQuerySQL returns the FROM-clause items for mode, binding the query
+// text as $1 and exposing the tsquery a chunk must match as "query", plus
+// the ORDER BY clause ranking the matches. Rewriting " & " to " | " in plainto_tsquery's text form leaves
+// phrase operators (<->, from hyphenated words) intact.
+func textQuerySQL(mode TextQueryMode) (from, orderBy string) {
+	const orQuery = `(SELECT replace(plainto_tsquery('english', $1)::text, ' & ', ' | ')::tsquery AS query) AS or_query`
+	switch mode {
+	case TextQueryWebsearch:
+		return `websearch_to_tsquery('english', $1) AS query`, `ts_rank(search_vector, query) DESC`
+	case TextQueryOr:
+		return orQuery, `ts_rank(search_vector, query) DESC`
+	case TextQueryAndOr:
+		return orQuery + `, plainto_tsquery('english', $1) AS and_query`,
+			`(search_vector @@ and_query) DESC, ts_rank(search_vector, query) DESC`
+	default:
+		return `plainto_tsquery('english', $1) AS query`, `ts_rank(search_vector, query) DESC`
+	}
+}
+
 // textCandidates returns up to limit chunks whose chunk_text matches
-// queryText, ordered by descending full-text rank, at chunk granularity. An
-// empty or all-stopword queryText matches nothing and is not an error.
+// queryText (as interpreted by the dao's TextQueryMode), ordered by
+// descending full-text rank, at chunk granularity. An empty or all-stopword
+// queryText matches nothing and is not an error.
 func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, limit int, filters SearchFilters) ([]chunkRef, error) {
 	if strings.TrimSpace(queryText) == "" {
 		return nil, nil
 	}
 
+	from, orderBy := textQuerySQL(dao.textQuery)
 	rows, err := dao.pool.Query(ctx,
 		`SELECT memory_key, chunk_index, type
-		 FROM embeddings, plainto_tsquery('english', $1) AS query
+		 FROM embeddings, `+from+`
 		 WHERE search_vector @@ query
 		   AND`+candidateFilterSQL+`
-		 ORDER BY ts_rank(search_vector, query) DESC
+		 ORDER BY `+orderBy+`
 		 LIMIT $6`,
 		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil,
 	)

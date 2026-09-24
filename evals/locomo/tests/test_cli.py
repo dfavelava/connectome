@@ -47,13 +47,13 @@ def client():
 
 
 def args(**overrides):
-    defaults = {"ks": [1, 5], "concurrency": 2, "no_occurred_at": False, "keep_tomes": False}
+    defaults = {"ks": [1, 5], "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None}
     return argparse.Namespace(**{**defaults, **overrides})
 
 
 def test_run_ingests_scores_and_destroys_tome(client):
     sample = parse_sample(RAW_SAMPLE)
-    results, skipped = asyncio.run(cli.run(client, args(), [sample], "r1"))
+    results, skipped, key_maps = asyncio.run(cli.run(client, args(), [sample], "r1"))
 
     assert [c["content"] for c in client.remember_calls][0] == "[1:56 pm on 8 May, 2023] Caroline: Hey Mel!"
     assert client.remember_calls[0]["tome"] == "temp-locomo-r1-conv-1"
@@ -67,7 +67,7 @@ def test_run_ingests_scores_and_destroys_tome(client):
 def test_run_maps_tome_scoped_search_keys_back_to_dialog_ids(client):
     raw = copy.deepcopy(RAW_SAMPLE)
     raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
-    results, _ = asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r4"))
+    results, _, _ = asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r4"))
     assert results[-1].retrieved == ("D2:1",)
 
 
@@ -105,3 +105,17 @@ def test_ks_parsing():
         cli._ks("0,5")
     with pytest.raises(argparse.ArgumentTypeError):
         cli._ks("51")
+
+
+def test_reuse_tomes_queries_kept_tomes_without_ingesting(client):
+    sample = parse_sample(RAW_SAMPLE)
+    _, _, key_maps = asyncio.run(cli.run(client, args(keep_tomes=True), [sample], "r6"))
+    assert set(key_maps["conv-1"].values()) == {t.dia_id for t in sample.turns}
+    ingested = len(client.remember_calls)
+
+    results, _, reused = asyncio.run(cli.run(client, args(), [sample], "r6", key_maps))
+
+    assert len(client.remember_calls) == ingested
+    assert client.destroyed == []
+    assert reused == key_maps
+    assert [r.question for r in results] == ["When?", "Adversarial?"]
