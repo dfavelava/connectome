@@ -139,6 +139,14 @@ cd backend
 POSTGRES_HOST=localhost go run ./cmd/reindex -dry-run
 ```
 
+**Upgrading from a version without embedding task prefixes:** stored chunks
+are now embedded as `search_document: <text>` and search queries as
+`search_query: <text>`, the task prefixes `nomic-embed-text` was trained
+with (issue #9). Vectors written before this change were embedded from raw
+text and don't match the new query embeddings, so run `cmd/reindex` once
+after upgrading to rebuild them. (`POST /api/llm/embed` still embeds its
+input as-is, with no prefix.)
+
 ### Hybrid search ranking
 
 `POST /api/connectome/memory/search` ranks results with a blend of vector
