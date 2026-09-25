@@ -163,6 +163,14 @@ Blend weights are configurable via `backend/.env` (see `backend/.env.example`):
 - `SEARCH_RRF_K` (default `60`) - the RRF rank constant; higher values flatten
   the influence of rank position, so weights matter more than exact rank.
 
+### Indexing concurrency
+
+Each written memory's chunks are embedded in a single Ollama request.
+`INDEX_CONCURRENCY` in `backend/.env` (default `4`) caps how many of those
+embed requests are in flight at once across all writes, and how many files
+one `POST /api/connectome/memory/batch` processes at once. Cancelling a
+request cancels its in-flight embed and skips memories still waiting.
+
 ## MCP server
 
 The MCP server exposes Connectome memory operations over stdio. Configure `connectomeMCP/.env`:

@@ -34,11 +34,15 @@ const (
 	fakeQuerySide    float32 = 1
 )
 
-func (fakeEmbedder) EmbedDocument(input string) ([]float32, error) {
-	return []float32{float32(len(input)), fakeDocumentSide}, nil
+func (fakeEmbedder) EmbedDocuments(_ context.Context, inputs []string) ([][]float32, error) {
+	embeddings := make([][]float32, len(inputs))
+	for i, input := range inputs {
+		embeddings[i] = []float32{float32(len(input)), fakeDocumentSide}
+	}
+	return embeddings, nil
 }
 
-func (fakeEmbedder) EmbedQuery(input string) ([]float32, error) {
+func (fakeEmbedder) EmbedQuery(_ context.Context, input string) ([]float32, error) {
 	return []float32{float32(len(input)), fakeQuerySide}, nil
 }
 
