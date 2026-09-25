@@ -40,7 +40,7 @@ func (r *LLMResourceImpl) embed(c *gin.Context) {
 		return
 	}
 
-	embeddings, err := r.manager.Embed(req.Input)
+	embeddings, err := r.manager.Embed(c.Request.Context(), req.Input)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

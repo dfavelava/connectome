@@ -8,6 +8,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -27,12 +29,30 @@ const (
 	memoryChunkOverlapWords = 50
 )
 
+// defaultIndexConcurrency caps how many memories are embedded at once when
+// INDEX_CONCURRENCY is unset or invalid.
+const defaultIndexConcurrency = 4
+
+// indexConcurrencyFromEnv reads INDEX_CONCURRENCY, the most memories a
+// MemoryResourceImpl embeds at once (and the most files one batch write
+// processes at once), falling back to defaultIndexConcurrency when it is
+// unset or not a positive integer.
+func indexConcurrencyFromEnv() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("INDEX_CONCURRENCY")))
+	if err != nil || n <= 0 {
+		return defaultIndexConcurrency
+	}
+	return n
+}
+
 // Embedder produces vector embeddings for text. Stored chunks and search
 // queries are embedded differently (see managers.DocumentPrefix), so callers
-// must pick the side they're on. Satisfied by *managers.OllamaManager.
+// must pick the side they're on. EmbedDocuments embeds all of a memory's
+// chunks in one call, returning one embedding per input in order. Both stop
+// when ctx is cancelled. Satisfied by *managers.OllamaManager.
 type Embedder interface {
-	EmbedDocument(input string) ([]float32, error)
-	EmbedQuery(input string) ([]float32, error)
+	EmbedDocuments(ctx context.Context, inputs []string) ([][]float32, error)
+	EmbedQuery(ctx context.Context, input string) ([]float32, error)
 }
 
 // EmbeddingsIndexer is the subset of *daos.EmbeddingsDao that memoryResource
@@ -46,6 +66,12 @@ type MemoryResourceImpl struct {
 	manager    managers.MemoryManager
 	embedder   Embedder
 	embeddings EmbeddingsIndexer
+
+	// indexConcurrency bounds how many files one batchWrite processes at
+	// once; embedSlots (sized the same) bounds how many IndexMemory embed
+	// calls are in flight across every request this resource serves.
+	indexConcurrency int
+	embedSlots       chan struct{}
 }
 
 type BatchReadError struct {
@@ -91,10 +117,13 @@ func newMemoryFile(content []byte) multipart.File {
 }
 
 func NewMemoryResource(manager managers.MemoryManager, embedder Embedder, embeddings EmbeddingsIndexer) *MemoryResourceImpl {
+	concurrency := indexConcurrencyFromEnv()
 	return &MemoryResourceImpl{
-		manager:    manager,
-		embedder:   embedder,
-		embeddings: embeddings,
+		manager:          manager,
+		embedder:         embedder,
+		embeddings:       embeddings,
+		indexConcurrency: concurrency,
+		embedSlots:       make(chan struct{}, concurrency),
 	}
 }
 
@@ -207,14 +236,19 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 
 	chunks := ChunkWords(body, memoryChunkWords, memoryChunkOverlapWords)
 
+	embeddings, err := resource.embedDocuments(ctx, chunks)
+	if err != nil {
+		return fmt.Errorf("embed %s: %w", key, err)
+	}
+	if len(embeddings) != len(chunks) {
+		return fmt.Errorf("embed %s: expected %d embeddings, got %d", key, len(chunks), len(embeddings))
+	}
+
 	rows := make([]daos.EmbeddingRow, len(chunks))
 	createdAt := fm.createdAtOrNow()
 	acl := ResolveACL(fm.ACL)
 	for i, chunk := range chunks {
-		embedding, err := resource.embedder.EmbedDocument(chunk)
-		if err != nil {
-			return fmt.Errorf("embed chunk %d of %s: %w", i, key, err)
-		}
+		embedding := embeddings[i]
 		rows[i] = daos.EmbeddingRow{
 			ChunkIndex: i,
 			Embedding:  embedding,
@@ -234,6 +268,22 @@ func (resource *MemoryResourceImpl) IndexMemory(ctx context.Context, key, conten
 		return fmt.Errorf("supersede embeddings for %s: %w", key, err)
 	}
 	return resource.embeddings.InsertEmbeddings(ctx, key, rows)
+}
+
+// embedDocuments embeds chunks once one of the resource's embed slots is
+// free, so no more than indexConcurrency embed calls are ever in flight. It
+// gives up without embedding if ctx is cancelled while waiting.
+func (resource *MemoryResourceImpl) embedDocuments(ctx context.Context, chunks []string) ([][]float32, error) {
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+	select {
+	case resource.embedSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-resource.embedSlots }()
+	return resource.embedder.EmbedDocuments(ctx, chunks)
 }
 
 func (resource *MemoryResourceImpl) write(c *gin.Context) {
@@ -290,14 +340,24 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 	}
 
 	tome := c.PostForm("tome")
+	ctx := c.Request.Context()
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(fileHeaders))
+	workers := make(chan struct{}, resource.indexConcurrency)
 
 	for _, fileHeader := range fileHeaders {
 		wg.Add(1)
 		go func(fileHeader *multipart.FileHeader) {
 			defer wg.Done()
+
+			select {
+			case workers <- struct{}{}:
+			case <-ctx.Done():
+				errCh <- fmt.Errorf("%s: %w", fileHeader.Filename, ctx.Err())
+				return
+			}
+			defer func() { <-workers }()
 
 			file, err := fileHeader.Open()
 			if err != nil {
@@ -323,7 +383,7 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 				return
 			}
 
-			if err := resource.IndexMemory(c.Request.Context(), scopedKey, string(content), tome); err != nil {
+			if err := resource.IndexMemory(ctx, scopedKey, string(content), tome); err != nil {
 				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
 			}
 		}(fileHeader)

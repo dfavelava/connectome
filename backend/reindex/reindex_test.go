@@ -53,12 +53,16 @@ func (m *fakeManager) ListObjects(string) (*managers.MemoryListResult, error) {
 // rebuild tests can assert memories are embedded as documents, not queries.
 type fakeEmbedder struct{ calls, queryCalls int }
 
-func (f *fakeEmbedder) EmbedDocument(input string) ([]float32, error) {
+func (f *fakeEmbedder) EmbedDocuments(_ context.Context, inputs []string) ([][]float32, error) {
 	f.calls++
-	return []float32{float32(len(input))}, nil
+	embeddings := make([][]float32, len(inputs))
+	for i, input := range inputs {
+		embeddings[i] = []float32{float32(len(input))}
+	}
+	return embeddings, nil
 }
 
-func (f *fakeEmbedder) EmbedQuery(input string) ([]float32, error) {
+func (f *fakeEmbedder) EmbedQuery(_ context.Context, input string) ([]float32, error) {
 	f.queryCalls++
 	return []float32{float32(len(input))}, nil
 }
