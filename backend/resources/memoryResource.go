@@ -305,15 +305,18 @@ func (resource *MemoryResourceImpl) write(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+
+	// Reject a client error before anything is stored, so a bad document
+	// never lands in the blob store unindexed.
+	if err := ValidateMemoryDocument(string(content)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s: %v", fileHeader.Filename, err)})
 		return
 	}
 
 	tome := c.PostForm("tome")
 	scopedKey := TomeScopedKey(tome, fileHeader.Filename)
 
-	if err := resource.manager.PutObject(scopedKey, file); err != nil {
+	if err := resource.manager.PutObject(scopedKey, newMemoryFile(content)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -339,6 +342,26 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 		return
 	}
 
+	// Read and validate every file before storing any of them, so one bad
+	// document rejects the whole batch with nothing written.
+	contents := make([][]byte, len(fileHeaders))
+	var invalid []string
+	for i, fileHeader := range fileHeaders {
+		content, err := readFormFile(fileHeader)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		if err := ValidateMemoryDocument(string(content)); err != nil {
+			invalid = append(invalid, fmt.Sprintf("%s: %v", fileHeader.Filename, err))
+		}
+		contents[i] = content
+	}
+	if len(invalid) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("batch rejected: %s", strings.Join(invalid, "; "))})
+		return
+	}
+
 	tome := c.PostForm("tome")
 	ctx := c.Request.Context()
 
@@ -346,47 +369,30 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 	errCh := make(chan error, len(fileHeaders))
 	workers := make(chan struct{}, resource.indexConcurrency)
 
-	for _, fileHeader := range fileHeaders {
+	for i, fileHeader := range fileHeaders {
 		wg.Add(1)
-		go func(fileHeader *multipart.FileHeader) {
+		go func(name string, content []byte) {
 			defer wg.Done()
 
 			select {
 			case workers <- struct{}{}:
 			case <-ctx.Done():
-				errCh <- fmt.Errorf("%s: %w", fileHeader.Filename, ctx.Err())
+				errCh <- fmt.Errorf("%s: %w", name, ctx.Err())
 				return
 			}
 			defer func() { <-workers }()
 
-			file, err := fileHeader.Open()
-			if err != nil {
-				errCh <- fmt.Errorf("open %s: %w", fileHeader.Filename, err)
-				return
-			}
-			defer file.Close()
+			scopedKey := TomeScopedKey(tome, name)
 
-			content, err := io.ReadAll(file)
-			if err != nil {
-				errCh <- fmt.Errorf("read %s: %w", fileHeader.Filename, err)
-				return
-			}
-			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				errCh <- fmt.Errorf("seek %s: %w", fileHeader.Filename, err)
-				return
-			}
-
-			scopedKey := TomeScopedKey(tome, fileHeader.Filename)
-
-			if err := resource.manager.PutObject(scopedKey, file); err != nil {
-				errCh <- fmt.Errorf("upload %s: %w", fileHeader.Filename, err)
+			if err := resource.manager.PutObject(scopedKey, newMemoryFile(content)); err != nil {
+				errCh <- fmt.Errorf("upload %s: %w", name, err)
 				return
 			}
 
 			if err := resource.IndexMemory(ctx, scopedKey, string(content), tome); err != nil {
-				errCh <- fmt.Errorf("index %s: %w", fileHeader.Filename, err)
+				errCh <- fmt.Errorf("index %s: %w", name, err)
 			}
-		}(fileHeader)
+		}(fileHeader.Filename, contents[i])
 	}
 
 	wg.Wait()
@@ -405,6 +411,21 @@ func (resource *MemoryResourceImpl) batchWrite(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"message": "success"})
+}
+
+// readFormFile reads one uploaded multipart file into memory.
+func readFormFile(fileHeader *multipart.FileHeader) ([]byte, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", fileHeader.Filename, err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", fileHeader.Filename, err)
+	}
+	return content, nil
 }
 
 func (resource *MemoryResourceImpl) list(c *gin.Context) {

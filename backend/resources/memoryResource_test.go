@@ -449,13 +449,88 @@ func TestMemoryWriteIndexesOccurredAt(t *testing.T) {
 			"---\nbody\n"
 		body, contentType := multipartBody(t, []filePart{{name: key, content: doc}})
 		resp, payload := doRequest(t, http.MethodPost, base+"/", body, map[string]string{"Content-Type": contentType})
-		if resp.StatusCode == http.StatusOK {
-			t.Fatalf("expected write to reject malformed occurred_at, got 200 (%s)", payload)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 for malformed occurred_at, got %d (%s)", resp.StatusCode, payload)
+		}
+		msg, _ := decodeJSON(t, payload)["error"].(string)
+		if !strings.Contains(msg, "occurred_at") || !strings.Contains(msg, "not-a-date") {
+			t.Fatalf("expected error to name occurred_at and the bad value, got %q", msg)
 		}
 		if len(indexer.rowsFor(key)) != 0 {
 			t.Fatalf("expected no rows indexed for a rejected write")
 		}
+		assertNotStored(t, base, key)
 	})
+}
+
+// TestMemoryBatchWriteRejectsMalformedOccurredAt checks one memory with a
+// malformed occurred_at rejects the whole batch with 400 before any file -
+// including a valid memory and an entity record alongside it - is stored or
+// indexed.
+func TestMemoryBatchWriteRejectsMalformedOccurredAt(t *testing.T) {
+	srv, _, indexer := newTestServer(t)
+	base := srv.URL + "/api/connectome/memory"
+
+	bad := "---\n" +
+		"type: event\n" +
+		"created_at: \"2024-01-01T00:00:00Z\"\n" +
+		"occurred_at: \"2023-06-15\"\n" +
+		"entities: []\n" +
+		"---\nbody\n"
+	parts := []filePart{
+		{name: "mem_batch_good.md", content: memoryDocument("note", "good", nil)},
+		{name: "mem_batch_bad.md", content: bad},
+		{name: "ent_ada.json", content: `{"id":"ada","memory_ids":["mem_batch_good.md"]}`},
+	}
+
+	body, contentType := multipartBody(t, parts)
+	resp, payload := doRequest(t, http.MethodPost, base+"/batch", body, map[string]string{"Content-Type": contentType})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", resp.StatusCode, payload)
+	}
+	msg, _ := decodeJSON(t, payload)["error"].(string)
+	if !strings.Contains(msg, "mem_batch_bad.md") || !strings.Contains(msg, "2023-06-15") {
+		t.Fatalf("expected error to name the bad file and value, got %q", msg)
+	}
+
+	for _, p := range parts {
+		if rows := indexer.rowsFor(p.name); len(rows) != 0 {
+			t.Fatalf("expected no rows for %s, got %d", p.name, len(rows))
+		}
+		assertNotStored(t, base, p.name)
+	}
+	if n := indexer.insertCount(); n != 0 {
+		t.Fatalf("expected no embeddings inserted, got %d inserts", n)
+	}
+}
+
+// assertNotStored checks key is neither readable via GET /memory/ nor listed
+// by /memory/list.
+func assertNotStored(t *testing.T, base, key string) {
+	t.Helper()
+
+	resp, payload := doRequest(t, http.MethodGet, base+"/?key="+key, nil, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("read %s: expected 404, got %d (%s)", key, resp.StatusCode, payload)
+	}
+
+	resp, payload = doRequest(t, http.MethodGet, base+"/list", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	var listResult struct {
+		Contents []struct {
+			Key string `json:"Key"`
+		} `json:"Contents"`
+	}
+	if err := json.Unmarshal(payload, &listResult); err != nil {
+		t.Fatalf("list: decode %q: %v", payload, err)
+	}
+	for _, c := range listResult.Contents {
+		if c.Key == key {
+			t.Fatalf("list: expected %s not to be stored", key)
+		}
+	}
 }
 
 func TestMemoryBatchWriteAndBatchRead(t *testing.T) {
