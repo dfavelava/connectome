@@ -98,6 +98,19 @@ func (fm memoryFrontmatter) occurredAt() (*time.Time, error) {
 	return &t, nil
 }
 
+// ValidateMemoryDocument reports a client error in a memory document that
+// would otherwise only surface when IndexMemory runs, after the blob is
+// stored: today, a present-but-malformed occurred_at. Content with no valid
+// memory frontmatter (e.g. an ent_*.json entity record) always passes.
+func ValidateMemoryDocument(content string) error {
+	fm, _, ok := ParseMemoryDocument(content)
+	if !ok {
+		return nil
+	}
+	_, err := fm.occurredAt()
+	return err
+}
+
 // ChunkWords splits text into ~chunkSize-word chunks with overlap words of
 // context repeated between consecutive chunks. Word count stands in for a
 // token count here since no tokenizer is wired up for nomic-embed-text.
