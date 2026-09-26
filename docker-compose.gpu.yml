@@ -1,0 +1,16 @@
+# Opt-in NVIDIA GPU support for Ollama. Layer it on top of the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Requires the NVIDIA driver and the NVIDIA Container Toolkit on the host (see
+# "GPU acceleration" in the README). Only `ollama` gets the GPU: `ollama-pull`
+# just downloads the model and never runs it.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

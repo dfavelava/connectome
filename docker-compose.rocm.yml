@@ -1,0 +1,12 @@
+# Opt-in AMD GPU support for Ollama via ROCm. Layer it on top of the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
+#
+# Requires the amdgpu kernel driver on the host (see "GPU acceleration" in the
+# README). Only `ollama` gets the GPU: `ollama-pull` just downloads the model.
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri

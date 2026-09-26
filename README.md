@@ -59,6 +59,75 @@ curl -fsS -H "Authorization: Bearer test" \
 
 `docker compose ps` should show `backend` as `healthy` and `ollama-pull` as `exited (0)`.
 
+### GPU acceleration (optional)
+
+By default `ollama` runs on the CPU, so the stack starts on any machine. Every
+memory write and every `cmd/reindex` run embeds through Ollama, so a GPU makes
+indexing much faster. GPU support is opt-in through a second compose file
+layered on top of `docker-compose.yml`; only `ollama` gets the GPU
+(`ollama-pull` just downloads the model).
+
+**NVIDIA.** Prerequisites on the host:
+
+1. The NVIDIA driver (`nvidia-smi` on the host should list your GPU).
+2. The [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+   registered with Docker:
+
+   ```bash
+   sudo nvidia-ctk runtime configure --runtime=docker
+   ```
+
+   ```bash
+   sudo systemctl restart docker
+   ```
+
+Then start the stack with the GPU file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+**AMD (ROCm).** With the `amdgpu` kernel driver loaded (`/dev/kfd` and
+`/dev/dri` present on the host), use `docker-compose.rocm.yml` instead. It
+switches `ollama` to the `ollama/ollama:rocm` image and passes those devices
+through:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
+```
+
+Passing `-f` turns off Compose's automatic loading of
+`docker-compose.override.yml`. If you keep a local override, list it too
+(`-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.gpu.yml`),
+or set it once in the repo-root `.env` so plain `docker compose up` picks it up
+(use `;` instead of `:` as the separator on Windows):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:docker-compose.gpu.yml
+```
+
+**Checking that it works.** On NVIDIA, the GPU should be visible inside the
+container:
+
+```bash
+docker compose exec ollama nvidia-smi
+```
+
+Ollama logs the compute device it found at startup. Look for an
+`inference compute` line naming your GPU (it says `library=cpu` when no GPU was
+detected):
+
+```bash
+docker compose logs ollama | grep -i "inference compute"
+```
+
+After an embed request (for example the smoke check above), `ollama ps` shows
+where the model is loaded: `100% GPU` in the `PROCESSOR` column.
+
+```bash
+docker compose exec ollama ollama ps
+```
+
 ## Storage
 
 Set `MEMORY_MANAGER` in `backend/.env` to one of:
@@ -227,6 +296,7 @@ of the request/formatting logic. See [`connectomeClient/README.md`](connectomeCl
 - `connectomeClient/` — Python HTTP client library for applications that talk to Connectome directly (not via MCP)
 - `evals/locomo/` — LoCoMo retrieval-recall eval harness (evidence recall@k per question category); see [`evals/locomo/README.md`](evals/locomo/README.md)
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
+- `docker-compose.gpu.yml` / `docker-compose.rocm.yml` — opt-in NVIDIA / AMD GPU overrides for `ollama`
 - `.connectome/` — local memory volume used by the local storage manager
 
 Application-specific logic built on top of the client (e.g. a Discord bot)
