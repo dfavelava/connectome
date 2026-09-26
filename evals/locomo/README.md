@@ -127,3 +127,37 @@ uv run pytest
 
 The tests cover dataset parsing, scoring, and the run loop against an
 in-memory fake client; they don't need a backend.
+
+### LLM calls (answering and judging)
+
+Answering and judging run on the local Ollama that `docker compose` already
+runs for embeddings, so no API key is needed. `locomo_eval.llm` is the
+provider layer:
+
+- Models are named `provider:exact-model-id`, e.g. `ollama:qwen3:8b`. Only
+  `ollama` is implemented; hosted providers can be added behind the same
+  interface without changing result files.
+- Calls use Ollama's `/api/chat` at `OLLAMA_HOST` (default
+  `http://localhost:11434`) with temperature 0, a fixed seed, a fixed
+  `num_ctx`, bounded output and thinking off (any `<think>` block that still
+  appears is stripped). Connection errors, timeouts and 5xx responses are
+  retried with backoff; the per-call timeout is generous for CPU inference.
+- The run config records each model's id, its digest (a tag like `qwen3:8b`
+  can move to new weights; the digest pins what actually ran) and the
+  sampling options.
+- Usage is recorded per stage and model: calls, token counts, wall-clock
+  seconds and output tokens/sec. `cost_usd` comes from
+  [`pricing.toml`](pricing.toml), where `ollama:*` is 0; models it doesn't
+  list record `null`.
+
+The compose `ollama` service doesn't publish its port, and `ollama-pull`
+only fetches the embedding model. From the repo root, layer on the eval
+override and pull a chat model:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.eval.yml up --build -d
+docker compose exec ollama ollama pull qwen3:8b
+```
+
+Local Ollama serves one request at a time unless `OLLAMA_NUM_PARALLEL` is
+set (the override passes it through), so keep LLM concurrency at 1-2.

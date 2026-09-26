@@ -1,0 +1,10 @@
+# USD per million tokens, by model id (`provider:model`). Keys may be glob
+# patterns; an exact key wins over a pattern, then the first matching pattern
+# in file order. Models that match nothing record cost_usd = null.
+#
+# Local Ollama models cost nothing to call; the real cost of a local run is
+# its wall-clock time, recorded alongside token counts.
+
+[models."ollama:*"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
