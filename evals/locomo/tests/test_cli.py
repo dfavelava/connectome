@@ -6,6 +6,7 @@ import pytest
 
 from locomo_eval import cli
 from locomo_eval.dataset import parse_sample
+from locomo_eval.metrics import Context
 from tests.test_dataset import RAW_SAMPLE
 
 
@@ -19,6 +20,7 @@ class FakeClient:
         self.tomes: dict[str, dict[str, str]] = {}
         self.destroyed: list[str] = []
         self.remember_calls: list[dict] = []
+        self.recall_calls: list[dict] = []
         self.fail_recall = False
 
     async def remember(self, content, memory_type, tome, occurred_at):
@@ -27,12 +29,17 @@ class FakeClient:
         self.tomes.setdefault(tome, {})[key] = content
         return {"key": key}
 
-    async def recall(self, query, k, tome):
+    async def recall(self, query, k, tome, hydrate=False):
         if self.fail_recall:
             raise RuntimeError("boom")
+        self.recall_calls.append({"query": query, "k": k, "hydrate": hydrate})
         words = set(query.lower().strip("?").split())
-        hits = [key for key, text in self.tomes.get(tome, {}).items() if words & set(text.lower().split())]
-        return {"results": [{"key": key} for key in hits[:k]]}
+        memories = self.tomes.get(tome, {})
+        hits = [key for key, text in memories.items() if words & set(text.lower().split())][:k]
+        if hydrate:
+            # Hydrated results carry the whole memory document, frontmatter included.
+            return {"results": [{"key": key, "content": f"---\ntype: event\n---\n{memories[key]}\n"} for key in hits]}
+        return {"results": [{"key": key} for key in hits]}
 
     async def destroy_tome(self, tome, confirm=False):
         self.destroyed.append(tome)
@@ -46,7 +53,7 @@ def client():
 
 
 def args(**overrides):
-    defaults = {"ks": [1, 5], "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None}
+    defaults = {"ks": [1, 5], "answer_k": 10, "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None}
     return argparse.Namespace(**{**defaults, **overrides})
 
 
@@ -74,7 +81,7 @@ def test_run_fails_loudly_on_unmapped_search_keys(client):
     raw = copy.deepcopy(RAW_SAMPLE)
     raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
 
-    async def recall(query, k, tome):
+    async def recall(query, k, tome, hydrate=False):
         return {"results": [{"key": "mem_from_somewhere_else.md"}]}
 
     client.recall = recall
@@ -118,3 +125,32 @@ def test_reuse_tomes_queries_kept_tomes_without_ingesting(client):
     assert client.destroyed == []
     assert reused == key_maps
     assert [r.question for r in results] == ["When?", "Adversarial?"]
+
+
+def test_run_saves_hydrated_contexts_and_gold_answers(client):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"].append({"question": "Hey back again?", "answer": 2022, "evidence": ["D2:1"], "category": 4})
+    results, _, _ = asyncio.run(cli.run(client, args(ks=[1], answer_k=3), [parse_sample(raw)], "r7"))
+
+    assert all(c["hydrate"] and c["k"] == 3 for c in client.recall_calls)
+    when, adversarial, back = results
+    assert (when.question_id, when.answer, when.adversarial_answer) == ("conv-1#0", "7 May 2023", None)
+    assert (adversarial.question_id, adversarial.answer, adversarial.adversarial_answer) == ("conv-1#1", None, "x")
+    assert back.question_id == "conv-1#3"
+    assert back.answer == "2022"
+    assert back.contexts == (
+        Context("D1:1", "[1:56 pm on 8 May, 2023] Caroline: Hey Mel!"),
+        Context("D2:1", "[not a date] Caroline: Back again."),
+    )
+    assert back.retrieved == ("D1:1", "D2:1")
+
+
+def test_recall_k_covers_answer_k():
+    assert cli.recall_k(args(ks=[1, 5, 10], answer_k=10)) == 10
+    assert cli.recall_k(args(ks=[1, 5], answer_k=20)) == 20
+    assert cli.recall_k(args(ks=[1, 50], answer_k=10)) == 50
+
+
+def test_memory_body_strips_frontmatter():
+    assert cli.memory_body("---\ntype: event\ntags: []\n---\n[date] A: hi\n") == "[date] A: hi"
+    assert cli.memory_body("no frontmatter") == "no frontmatter"

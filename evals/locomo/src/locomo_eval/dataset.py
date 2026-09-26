@@ -45,6 +45,12 @@ class QAItem:
     question: str
     category: int
     evidence: tuple[str, ...]
+    # Position in the sample's qa list; with the sample id, a stable question id.
+    qa_index: int
+    # The gold answer, carried by categories 1-4. Adversarial questions (5)
+    # carry only adversarial_answer: a plausible but wrong answer.
+    answer: str | None = None
+    adversarial_answer: str | None = None
 
     @property
     def category_name(self) -> str:
@@ -115,10 +121,18 @@ def parse_sample(raw: dict[str, object]) -> Sample:
             question=str(item["question"]),
             category=int(item["category"]),
             evidence=normalize_evidence(item.get("evidence") or []),
+            qa_index=index,
+            # A few answers are bare integers (years) in the JSON.
+            answer=_optional_str(item.get("answer")),
+            adversarial_answer=_optional_str(item.get("adversarial_answer")),
         )
-        for item in qa_items
+        for index, item in enumerate(qa_items)
     )
     return Sample(sample_id=str(raw["sample_id"]), turns=tuple(turns), qa=qa)
+
+
+def _optional_str(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def load_dataset(path: Path) -> list[Sample]:
