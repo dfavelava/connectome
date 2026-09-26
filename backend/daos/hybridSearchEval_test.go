@@ -21,6 +21,8 @@ func axisVector(dim int, lean float32) []float32 {
 	return v
 }
 
+var allTextQueryModes = []TextQueryMode{TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr, TextQueryBM25, TextQueryRareOr}
+
 // TestHybridSearchEvalSet is a small, fixed regression set for the ranking
 // behavior issue #18 exists to fix: vector-only search misses on names and
 // rare exact terms because their embeddings can be a mediocre ("lukewarm")
@@ -44,21 +46,21 @@ func TestHybridSearchEvalSet(t *testing.T) {
 	ctx := context.Background()
 
 	suffix := uuid.NewString()
+	// A tome of its own, so the IDF modes' per-tome lexeme statistics come
+	// from these four memories alone and not from whatever else the test
+	// database holds.
+	tome := "eval-" + suffix
 	vecTop := "mem_eval_vectop_" + suffix + ".md"
 	vecSecond := "mem_eval_vecsecond_" + suffix + ".md"
 	vecMid := "mem_eval_vecmid_" + suffix + ".md"
 	vecFar := "mem_eval_vecfar_" + suffix + ".md"
-	t.Cleanup(func() {
-		for _, key := range []string{vecTop, vecSecond, vecMid, vecFar} {
-			_ = dao.DeleteEmbeddingsForKey(context.Background(), key)
-		}
-	})
+	t.Cleanup(func() { _ = dao.DeleteEmbeddingsForTome(context.Background(), tome) })
 
 	now := time.Now().UTC()
 	seed := func(key, text string, lean float32) {
 		t.Helper()
 		if err := dao.InsertEmbeddings(ctx, key, []EmbeddingRow{
-			{ChunkIndex: 0, Embedding: axisVector(768, lean), ChunkText: text, Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"eval"}, ACL: []string{}, CreatedAt: now},
+			{ChunkIndex: 0, Embedding: axisVector(768, lean), ChunkText: text, Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"eval"}, ACL: []string{}, TomeID: tome, CreatedAt: now},
 		}); err != nil {
 			t.Fatalf("seed %s: %v", key, err)
 		}
@@ -126,15 +128,15 @@ func TestHybridSearchEvalSet(t *testing.T) {
 		},
 	}
 
-	for _, mode := range []TextQueryMode{TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr} {
-		modeDao := &EmbeddingsDao{pool: pool, weights: DefaultHybridWeights(), textQuery: mode}
+	for _, mode := range allTextQueryModes {
+		modeDao := &EmbeddingsDao{pool: pool, weights: DefaultHybridWeights(), textQuery: mode, bm25: DefaultBM25Params()}
 		for _, tc := range cases {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				expectedTop := tc.expectedTop
 				if override, ok := tc.expectedTopByMode[mode]; ok {
 					expectedTop = override
 				}
-				hits, err := modeDao.Search(ctx, tc.query, query, 10, SearchFilters{Entity: strPtr("eval")})
+				hits, err := modeDao.Search(ctx, tc.query, query, 10, SearchFilters{Entity: strPtr("eval"), TomeID: tome})
 				if err != nil {
 					t.Fatalf("search: %v", err)
 				}
@@ -146,5 +148,63 @@ func TestHybridSearchEvalSet(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestHybridSearchCommonTermMustNotOutrankRare pins issue #20's failure mode:
+// a query term nearly every memory contains (a speaker's name) must not let
+// those memories outrank the one memory holding the query's rare term.
+// ts_rank has no IDF, so under the OR modes the name's repeated occurrences
+// outscore a single rare match; the IDF modes must rank the rare match first.
+//
+// Vector ranks, closest first: commonTop, rare, then the other common
+// memories. commonTop's text is the longest of the name-only memories, so
+// BM25's length normalization ranks it below them - it keeps only its vector
+// lead, which the rare memory's text lead has to overcome.
+func TestHybridSearchCommonTermMustNotOutrankRare(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	tome := "eval-common-" + uuid.NewString()
+	dao := NewEmbeddingsDao(pool)
+	t.Cleanup(func() { _ = dao.DeleteEmbeddingsForTome(context.Background(), tome) })
+
+	now := time.Now().UTC()
+	seed := func(key, text string, lean float32) string {
+		t.Helper()
+		key = key + "_" + tome + ".md"
+		if err := dao.InsertEmbeddings(ctx, key, []EmbeddingRow{
+			{ChunkIndex: 0, Embedding: axisVector(768, lean), ChunkText: text, Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{}, ACL: []string{}, TomeID: tome, CreatedAt: now},
+		}); err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+		return key
+	}
+	commonTop := seed("mem_common_top", "Caroline said Caroline would call Caroline's mom about the weekend plans and the new car.", 1.0)
+	rare := seed("mem_rare", "Melanie said the pottery was fun.", 0.9)
+	seed("mem_common_a", "Caroline met Caroline's friend Caroline.", 0.5)
+	seed("mem_common_b", "Caroline told Caroline's dad Caroline.", 0.3)
+	seed("mem_common_c", "Caroline asked Caroline's boss Caroline.", 0.1)
+
+	// "try" is in no memory, so the AND modes match nothing and ranking falls
+	// to the vectors, where commonTop leads.
+	expectedTop := map[TextQueryMode]string{
+		TextQueryPlain:     commonTop,
+		TextQueryWebsearch: commonTop,
+		TextQueryOr:        commonTop,
+		TextQueryAndOr:     commonTop,
+		TextQueryBM25:      rare,
+		TextQueryRareOr:    rare,
+	}
+	for _, mode := range allTextQueryModes {
+		t.Run(string(mode), func(t *testing.T) {
+			modeDao := &EmbeddingsDao{pool: pool, weights: DefaultHybridWeights(), textQuery: mode, bm25: DefaultBM25Params()}
+			hits, err := modeDao.Search(ctx, "When did Caroline try pottery?", axisVector(768, 1.0), 10, SearchFilters{TomeID: tome})
+			if err != nil {
+				t.Fatalf("search: %v", err)
+			}
+			if len(hits) == 0 || hits[0].MemoryKey != expectedTop[mode] {
+				t.Fatalf("expected top hit %s, got %+v", expectedTop[mode], hits)
+			}
+		})
 	}
 }
