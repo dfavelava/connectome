@@ -14,8 +14,9 @@ For each of the dataset's conversations:
    `[<session date>] <speaker>: <text>` (image turns get their caption
    appended), and `occurred_at` is set to the session date (UTC assumed, as
    the dataset has no timezone). `created_at` stays ingestion time.
-2. Sends each QA question to `recall` with `k = max(--ks)` and maps the
-   returned memory keys back to dialog ids (memory keys are random UUIDs).
+2. Sends each QA question to `recall` with `k = max(--ks + [--answer-k])` and
+   `hydrate: true`, and maps the returned memory keys back to dialog ids
+   (memory keys are random UUIDs).
 3. Destroys the tome - also when the run fails or is interrupted.
 
 It then reports, overall and per category (single-hop, multi-hop, temporal,
@@ -55,13 +56,20 @@ same `CONNECTOME_API_BASE_URL` / `CONNECTOME_API_KEY` environment variables
 (a `.env` in `evals/locomo/` is loaded if present). It prints a table and
 writes `results/<run-id>.json` containing the run config (backend URL, git
 commit, dataset sha256, k values, search weights, embedding model, chunking),
-the per-category summary, skip counts, and every question's evidence and
-retrieved dialog ids.
+the per-category summary, skip counts, and a record for every question. Each
+record has a stable `question_id` (`<sample_id>#<qa_index>`), the evidence and
+retrieved dialog ids, the gold `answer` (categories 1-4) or
+`adversarial_answer` (category 5, a plausible but wrong answer), and
+`contexts`: each retrieved turn's `{dia_id, text}` in rank order. That's
+everything an answering stage needs, so it can run offline from this file
+without calling the backend.
 
 Useful flags (`uv run locomo-eval --help` for all):
 
 - `--samples conv-26,conv-30` - run a subset of conversations.
 - `--ks 1,5,10,20` - k values to report (max 50, the backend's search cap).
+- `--answer-k N` - retrieved turns a later answering stage will use (default
+  10). Recall fetches at least this many, and `contexts` holds them all.
 - `--run-id NAME` - fixed tome/result name instead of a timestamp.
 - `--no-occurred-at` - leave `occurred_at` unset; the date stays in the text.
 - `--concurrency N` - in-flight requests during ingestion and querying.

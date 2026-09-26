@@ -13,12 +13,26 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Context:
+    """One retrieved dialog turn and its memory text, as recall returned it."""
+
+    dia_id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class QuestionResult:
     sample_id: str
     question: str
     category: str
     evidence: tuple[str, ...]
     retrieved: tuple[str, ...]
+    # "<sample_id>#<qa_index>", stable across runs.
+    question_id: str = ""
+    answer: str | None = None
+    adversarial_answer: str | None = None
+    # The retrieved turns' text, in rank order, so answering can run offline.
+    contexts: tuple[Context, ...] = ()
 
 
 def recall_at_k(evidence: tuple[str, ...], retrieved: tuple[str, ...], k: int) -> float:

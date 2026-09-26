@@ -24,12 +24,13 @@ from connectomeclient import ConnectomeClient
 from dotenv import load_dotenv
 
 from locomo_eval.dataset import Sample, Turn, load_dataset
-from locomo_eval.metrics import QuestionResult, summarize
+from locomo_eval.metrics import Context, QuestionResult, summarize
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_PATH = PROJECT_DIR / "data" / "locomo10.json"
 DEFAULT_RESULTS_DIR = PROJECT_DIR / "results"
 DEFAULT_KS = [1, 5, 10]
+DEFAULT_ANSWER_K = 10
 # The backend caps search k at 50 - see maxSearchK in backend/resources/searchResource.go.
 MAX_SEARCH_K = 50
 MEMORY_TEMPLATE = "[{session_date}] {speaker}: {text}"
@@ -42,6 +43,17 @@ def memory_text(turn: Turn) -> str:
 
 def tome_for(run_id: str, sample_id: str) -> str:
     return f"temp-locomo-{run_id}-{sample_id}".lower()
+
+
+def recall_k(args: argparse.Namespace) -> int:
+    return max([*args.ks, args.answer_k])
+
+
+def memory_body(content: str) -> str:
+    """A hydrated memory document's body, without its YAML frontmatter."""
+    if content.startswith("---\n") and (end := content.find("\n---\n", 4)) != -1:
+        content = content[end + len("\n---\n") :]
+    return content.strip()
 
 
 async def ingest(client: ConnectomeClient, sample: Sample, tome: str, concurrency: int, use_occurred_at: bool) -> dict[str, str]:
@@ -66,9 +78,9 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_to_dia:
     skipped = {"no_evidence": 0, "unknown_evidence_only": 0, "unknown_evidence_ids": 0}
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def ask(question: str) -> tuple[str, ...]:
+    async def ask(question: str) -> tuple[Context, ...]:
         async with semaphore:
-            response = await client.recall(question, k=k, tome=tome)
+            response = await client.recall(question, k=k, tome=tome, hydrate=True)
         hits = response.get("results") or []
         assert isinstance(hits, list)
         keys = [hit["key"] for hit in hits]
@@ -76,7 +88,7 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_to_dia:
             # Every hit comes from this run's own tome, so an unmapped key means
             # the key shape changed - fail rather than silently score zero.
             raise RuntimeError(f"recall returned keys not ingested into {tome}: {unknown[:3]}")
-        return tuple(key_to_dia[key] for key in keys)
+        return tuple(Context(dia_id=key_to_dia[hit["key"]], text=memory_body(hit.get("content") or "")) for hit in hits)
 
     scored = []
     for item in sample.qa:
@@ -97,9 +109,13 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_to_dia:
             question=item.question,
             category=item.category_name,
             evidence=evidence,
-            retrieved=hits,
+            retrieved=tuple(c.dia_id for c in contexts),
+            question_id=f"{sample.sample_id}#{item.qa_index}",
+            answer=item.answer,
+            adversarial_answer=item.adversarial_answer,
+            contexts=contexts,
         )
-        for (item, evidence), hits in zip(scored, retrieved, strict=True)
+        for (item, evidence), contexts in zip(scored, retrieved, strict=True)
     ]
     return results, skipped
 
@@ -124,7 +140,7 @@ async def run(
     Given key_maps (from an earlier --keep-tomes run named run_id), ingestion
     is skipped and that run's tomes are queried and left in place instead.
     """
-    k = max(args.ks)
+    k = recall_k(args)
     reuse = key_maps is not None
     key_maps = dict(key_maps or {})
     results: list[QuestionResult] = []
@@ -169,7 +185,8 @@ def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list
         "dataset": {"path": str(args.data), "sha256": _sha256(args.data)},
         "samples": [s.sample_id for s in samples],
         "ks": args.ks,
-        "recall_k": max(args.ks),
+        "recall_k": recall_k(args),
+        "answer_k": args.answer_k,
         # The backend reads these from its own environment and does not
         # expose them over HTTP, so they are recorded as reported by the
         # harness's environment - see the README for keeping the two in sync.
@@ -207,6 +224,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where to write <run-id>.json (default: %(default)s)")
     parser.add_argument("--run-id", help="tome/result name suffix (default: a UTC timestamp)")
     parser.add_argument("--ks", type=_ks, default=DEFAULT_KS, help="comma-separated k values (default: 1,5,10)")
+    parser.add_argument(
+        "--answer-k",
+        type=int,
+        default=DEFAULT_ANSWER_K,
+        help="retrieved turns an answer stage will use; recall fetches max(ks + [answer-k]) (default: %(default)s)",
+    )
     parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to run (default: all)")
     parser.add_argument("--concurrency", type=int, default=8, help="max in-flight requests (default: %(default)s)")
     parser.add_argument("--timeout", type=float, default=60.0, help="per-request timeout in seconds (default: %(default)s)")
@@ -219,7 +242,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="query the tomes an earlier --keep-tomes run left behind instead of ingesting (for comparing backend search settings on one index)",
     )
     parser.add_argument("--cleanup", metavar="RUN_ID", help="destroy the tomes left behind by RUN_ID and exit")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not 1 <= args.answer_k <= MAX_SEARCH_K:
+        parser.error(f"--answer-k must be between 1 and {MAX_SEARCH_K}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:

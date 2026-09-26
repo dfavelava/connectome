@@ -47,5 +47,8 @@ def test_parse_sample():
     assert sample.turns[2].occurred_at is None
 
     assert [q.category_name for q in sample.qa] == ["temporal", "adversarial", "single-hop"]
+    assert [q.qa_index for q in sample.qa] == [0, 1, 2]
+    assert [q.answer for q in sample.qa] == ["7 May 2023", None, "y"]
+    assert [q.adversarial_answer for q in sample.qa] == [None, "x", None]
     assert sample.qa[1].evidence == ("D1:2", "D2:1")
     assert sample.qa[2].evidence == ()
