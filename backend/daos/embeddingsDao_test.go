@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,10 +21,30 @@ import (
 // for the go job (see .github/workflows/ci.yml) so this always runs there.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	return newTestPool(t, "")
+}
+
+// scratchTestPool is testPool with its own freshly created schema first on
+// the search_path, so the DAO's unqualified "embeddings" is a private, empty
+// table that is dropped when the test ends. Tests that act on the whole
+// table (TruncateEmbeddings) use it so they can never touch the shared
+// embeddings table of the database they run against - often a developer's
+// docker compose Postgres.
+func scratchTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	return newTestPool(t, "test_"+strings.ReplaceAll(uuid.NewString(), "-", ""))
+}
+
+func newTestPool(t *testing.T, schema string) *pgxpool.Pool {
+	t.Helper()
 
 	config, err := pgxpool.ParseConfig(testConnString())
 	if err != nil {
 		t.Fatalf("parse test postgres config: %v", err)
+	}
+	if schema != "" {
+		// public stays on the path for the vector extension's type.
+		config.ConnConfig.RuntimeParams["search_path"] = schema + ", public"
 	}
 	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		return pgxvec.RegisterTypes(ctx, conn)
@@ -44,6 +65,17 @@ func testPool(t *testing.T) *pgxpool.Pool {
 
 	if _, err := pool.Exec(context.Background(), `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
 		t.Fatalf("create vector extension: %v", err)
+	}
+	if schema != "" {
+		if _, err := pool.Exec(context.Background(), `CREATE SCHEMA `+schema); err != nil {
+			t.Fatalf("create schema %s: %v", schema, err)
+		}
+		// Registered after pool.Close, so it runs first.
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`); err != nil {
+				t.Errorf("drop schema %s: %v", schema, err)
+			}
+		})
 	}
 	if _, err := pool.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS embeddings (
@@ -69,6 +101,15 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		CREATE INDEX IF NOT EXISTS embeddings_search_vector_gin_idx
 			ON embeddings USING gin (search_vector)`); err != nil {
 		t.Fatalf("create search_vector gin index: %v", err)
+	}
+	if schema != "" {
+		var resolved string
+		if err := pool.QueryRow(context.Background(), `SELECT relnamespace::regnamespace::text FROM pg_class WHERE oid = 'embeddings'::regclass`).Scan(&resolved); err != nil {
+			t.Fatalf("resolve embeddings table: %v", err)
+		}
+		if resolved != schema {
+			t.Fatalf("expected embeddings to resolve to the scratch schema %s, got %s", schema, resolved)
+		}
 	}
 
 	return pool
@@ -542,40 +583,48 @@ func TestEmbeddingsDaoDeleteEmbeddingsForTomeRemovesOnlyThatTome(t *testing.T) {
 }
 
 func TestEmbeddingsDaoTruncateEmbeddingsRemovesAllRows(t *testing.T) {
-	pool := testPool(t)
-	dao := NewEmbeddingsDao(pool)
 	ctx := context.Background()
 
-	keyA := "mem_truncate_a_" + uuid.NewString() + ".md"
-	keyB := "mem_truncate_b_" + uuid.NewString() + ".md"
-	t.Cleanup(func() {
-		_ = dao.DeleteEmbeddingsForKey(context.Background(), keyA)
-		_ = dao.DeleteEmbeddingsForKey(context.Background(), keyB)
-	})
-
-	if err := dao.InsertEmbeddings(ctx, keyA, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
+	// A row in the shared table, which truncating the scratch table must
+	// leave alone.
+	sharedPool := testPool(t)
+	sharedDao := NewEmbeddingsDao(sharedPool)
+	sentinelKey := "mem_truncate_sentinel_" + uuid.NewString() + ".md"
+	t.Cleanup(func() { _ = sharedDao.DeleteEmbeddingsForKey(context.Background(), sentinelKey) })
+	if err := sharedDao.InsertEmbeddings(ctx, sentinelKey, []EmbeddingRow{
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, ACL: []string{}, CreatedAt: time.Now().UTC()},
 	}); err != nil {
-		t.Fatalf("insert keyA: %v", err)
+		t.Fatalf("insert sentinel: %v", err)
 	}
-	if err := dao.InsertEmbeddings(ctx, keyB, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
-	}); err != nil {
-		t.Fatalf("insert keyB: %v", err)
+
+	pool := scratchTestPool(t)
+	dao := NewEmbeddingsDao(pool)
+	for i, key := range []string{"mem_truncate_a.md", "mem_truncate_b.md"} {
+		if err := dao.InsertEmbeddings(ctx, key, []EmbeddingRow{
+			{ChunkIndex: 0, Embedding: unitVector(768, i), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: time.Now().UTC()},
+		}); err != nil {
+			t.Fatalf("insert %s: %v", key, err)
+		}
 	}
 
 	if err := dao.TruncateEmbeddings(ctx); err != nil {
 		t.Fatalf("truncate embeddings: %v", err)
 	}
 
-	neighbors, err := dao.NearestNeighbors(ctx, unitVector(768, 0), 50)
-	if err != nil {
-		t.Fatalf("nearest neighbors after truncate: %v", err)
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM embeddings`).Scan(&remaining); err != nil {
+		t.Fatalf("count after truncate: %v", err)
 	}
-	for _, n := range neighbors {
-		if n.MemoryKey == keyA || n.MemoryKey == keyB {
-			t.Fatalf("expected no rows to survive truncate, found %+v", n)
-		}
+	if remaining != 0 {
+		t.Fatalf("expected no rows to survive truncate, found %d", remaining)
+	}
+
+	var sentinels int
+	if err := sharedPool.QueryRow(ctx, `SELECT count(*) FROM embeddings WHERE memory_key = $1`, sentinelKey).Scan(&sentinels); err != nil {
+		t.Fatalf("count sentinel: %v", err)
+	}
+	if sentinels != 1 {
+		t.Fatalf("expected the shared table's sentinel %s to survive truncating the scratch table, found %d rows", sentinelKey, sentinels)
 	}
 }
 
