@@ -36,9 +36,29 @@ func TestTextQueryModeFromEnv(t *testing.T) {
 		t.Fatalf("expected or, got %q", got)
 	}
 
+	t.Setenv("SEARCH_TEXT_QUERY", "bm25")
+	if got := TextQueryModeFromEnv(); got != TextQueryBM25 {
+		t.Fatalf("expected bm25, got %q", got)
+	}
+
 	t.Setenv("SEARCH_TEXT_QUERY", "fuzzy")
 	if got := TextQueryModeFromEnv(); got != TextQueryPlain {
 		t.Fatalf("expected an unknown mode to fall back to plain, got %q", got)
+	}
+}
+
+func TestBM25ParamsFromEnv(t *testing.T) {
+	want := DefaultBM25Params()
+	if got := BM25ParamsFromEnv(); got != want {
+		t.Fatalf("expected defaults %+v with no env vars set, got %+v", want, got)
+	}
+
+	t.Setenv("SEARCH_BM25_K1", "0")
+	t.Setenv("SEARCH_BM25_B", "not-a-number")
+	t.Setenv("SEARCH_TEXT_MAX_DF", "0.1")
+	want = BM25Params{K1: 0, B: defaultBM25B, MaxDF: 0.1}
+	if got := BM25ParamsFromEnv(); got != want {
+		t.Fatalf("expected %+v, got %+v", want, got)
 	}
 }
 

@@ -46,10 +46,11 @@ type EmbeddingsDao struct {
 	pool      *pgxpool.Pool
 	weights   HybridWeights
 	textQuery TextQueryMode
+	bm25      BM25Params
 }
 
 func NewEmbeddingsDao(pool *pgxpool.Pool) *EmbeddingsDao {
-	return &EmbeddingsDao{pool: pool, weights: HybridWeightsFromEnv(), textQuery: TextQueryModeFromEnv()}
+	return &EmbeddingsDao{pool: pool, weights: HybridWeightsFromEnv(), textQuery: TextQueryModeFromEnv(), bm25: BM25ParamsFromEnv()}
 }
 
 // InsertEmbeddings stores one row per chunk under memoryKey. It does not
@@ -300,23 +301,86 @@ const (
 	// TextQueryAndOr matches like TextQueryOr but ranks every chunk that
 	// satisfies the full AND query above the OR-only matches.
 	TextQueryAndOr TextQueryMode = "and_or"
+	// TextQueryBM25 matches a chunk containing any of the query's lexemes,
+	// like TextQueryOr, but ranks by Okapi BM25 instead of ts_rank: each
+	// matched lexeme is weighted by its inverse document frequency within
+	// the searched tome, so a match on a term most chunks contain (a
+	// speaker's name, a month) counts for little next to a rare one. See
+	// issue #20 and BM25Params.
+	TextQueryBM25 TextQueryMode = "bm25"
+	// TextQueryRareOr drops the query lexemes found in more than
+	// BM25Params.MaxDF of the searched tome's chunks, then matches and
+	// ranks like TextQueryOr over the rest - a cheap approximation of
+	// TextQueryBM25's IDF weighting. A query with only common lexemes
+	// matches nothing.
+	TextQueryRareOr TextQueryMode = "rare_or"
 )
 
 // TextQueryModeFromEnv reads SEARCH_TEXT_QUERY, falling back to
 // TextQueryPlain when it is unset or not a known mode.
 func TextQueryModeFromEnv() TextQueryMode {
 	switch mode := TextQueryMode(os.Getenv("SEARCH_TEXT_QUERY")); mode {
-	case TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr:
+	case TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr, TextQueryBM25, TextQueryRareOr:
 		return mode
 	default:
 		return TextQueryPlain
 	}
 }
 
+// BM25Params tunes TextQueryBM25's scoring and TextQueryRareOr's cutoff. A
+// chunk scores the sum, over each query lexeme it contains, of
+//
+//	idf * tf*(K1+1) / (tf + K1*(1 - B + B*len/avglen))
+//
+// where idf = ln(1 + (N - df + 0.5)/(df + 0.5)), N is the number of chunks in
+// the searched tome, df how many of them contain the lexeme, tf how often the
+// chunk contains it, and len / avglen the chunk's and the tome's mean count
+// of distinct lexemes. K1 = 0 drops term frequency and length entirely,
+// leaving a plain sum of IDF over the matched lexemes.
+type BM25Params struct {
+	K1 float64
+	B  float64
+	// MaxDF is TextQueryRareOr's cutoff: the largest fraction (0-1] of the
+	// tome's chunks a query lexeme may appear in and still be searched. A
+	// lexeme found in a single chunk is always kept, so a small tome, where
+	// any one chunk is a large fraction, still has searchable terms.
+	MaxDF float64
+}
+
+const (
+	defaultBM25K1    = 1.2
+	defaultBM25B     = 0.75
+	defaultTextMaxDF = 0.05
+)
+
+// DefaultBM25Params are used when EmbeddingsDao is constructed without an
+// env override. See BM25ParamsFromEnv and backend/.env.example.
+func DefaultBM25Params() BM25Params {
+	return BM25Params{K1: defaultBM25K1, B: defaultBM25B, MaxDF: defaultTextMaxDF}
+}
+
+// BM25ParamsFromEnv reads SEARCH_BM25_K1, SEARCH_BM25_B, and
+// SEARCH_TEXT_MAX_DF, falling back to DefaultBM25Params for any unset or
+// unparsable value.
+func BM25ParamsFromEnv() BM25Params {
+	params := DefaultBM25Params()
+	if v, ok := floatEnv("SEARCH_BM25_K1"); ok {
+		params.K1 = v
+	}
+	if v, ok := floatEnv("SEARCH_BM25_B"); ok {
+		params.B = v
+	}
+	if v, ok := floatEnv("SEARCH_TEXT_MAX_DF"); ok {
+		params.MaxDF = v
+	}
+	return params
+}
+
 // textQuerySQL returns the FROM-clause items for mode, binding the query
 // text as $1 and exposing the tsquery a chunk must match as "query", plus
 // the ORDER BY clause ranking the matches. Rewriting " & " to " | " in plainto_tsquery's text form leaves
-// phrase operators (<->, from hyphenated words) intact.
+// phrase operators (<->, from hyphenated words) intact. The IDF modes
+// (TextQueryBM25, TextQueryRareOr) are built from lexemeStatsSQL instead.
 func textQuerySQL(mode TextQueryMode) (from, orderBy string) {
 	const orQuery = `(SELECT replace(plainto_tsquery('english', $1)::text, ' & ', ' | ')::tsquery AS query) AS or_query`
 	switch mode {
@@ -332,6 +396,71 @@ func textQuerySQL(mode TextQueryMode) (from, orderBy string) {
 	}
 }
 
+// lexemeStatsSQL is the WITH clause shared by the IDF modes. "stats" holds
+// the searched tome's ($8) chunk count and mean distinct-lexeme count;
+// "terms" holds each lexeme of the query text ($1) that occurs in the tome,
+// with its document frequency and IDF, and "matched" ORs those lexemes into
+// the tsquery a candidate must match. Statistics come from the whole tome
+// rather than the filtered rows, so one tome's vocabulary never skews
+// another's ranking and a filter doesn't change what counts as rare.
+//
+// Each lexeme is turned back into a tsquery with the 'simple' config, which
+// only lowercases, so an already-stemmed lexeme matches itself.
+const lexemeStatsSQL = `WITH stats AS (
+	  SELECT count(*)::float8 AS n, coalesce(avg(length(search_vector)), 0)::float8 AS avglen
+	  FROM embeddings WHERE tome_id = $8
+	), terms AS (
+	  SELECT t.lexeme, t.query, ln(1 + (stats.n - d.df + 0.5) / (d.df + 0.5)) AS idf
+	  FROM (SELECT lexeme, plainto_tsquery('simple', lexeme) AS query FROM unnest(to_tsvector('english', $1))) t
+	  CROSS JOIN stats
+	  CROSS JOIN LATERAL (
+	    SELECT count(*)::float8 AS df FROM embeddings WHERE tome_id = $8 AND search_vector @@ t.query
+	  ) d
+	  WHERE d.df > 0 AND %s
+	), matched AS (
+	  SELECT string_agg(query::text, ' | ')::tsquery AS query FROM terms
+	)`
+
+// bm25ScoreSQL scores the embeddings row aliased e per BM25Params, with
+// K1 bound as $11 and B as $12.
+const bm25ScoreSQL = `(
+	  SELECT sum(terms.idf * tf.tf * ($11::float8 + 1) / (tf.tf + $11::float8 * (1 - $12::float8 + $12::float8 * length(e.search_vector) / nullif(stats.avglen, 0))))
+	  FROM unnest(e.search_vector) v
+	  JOIN terms ON terms.lexeme = v.lexeme
+	  CROSS JOIN LATERAL (SELECT coalesce(array_length(v.positions, 1), 1)::float8 AS tf) tf
+	)`
+
+// textCandidatesSQL returns the full text-candidates query for mode, and any
+// arguments it binds beyond the shared $1-$10.
+func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode) (string, []any) {
+	switch mode {
+	case TextQueryBM25:
+		return fmt.Sprintf(lexemeStatsSQL, "true") + `
+		 SELECT memory_key, chunk_index, type
+		 FROM embeddings e, matched, stats
+		 WHERE e.search_vector @@ matched.query
+		   AND` + candidateFilterSQL + `
+		 ORDER BY ` + bm25ScoreSQL + ` DESC NULLS LAST, memory_key, chunk_index
+		 LIMIT $6`, []any{dao.bm25.K1, dao.bm25.B}
+	case TextQueryRareOr:
+		return fmt.Sprintf(lexemeStatsSQL, "d.df <= greatest(1, $11::float8 * stats.n)") + `
+		 SELECT memory_key, chunk_index, type
+		 FROM embeddings e, matched
+		 WHERE e.search_vector @@ matched.query
+		   AND` + candidateFilterSQL + `
+		 ORDER BY ts_rank(e.search_vector, matched.query) DESC NULLS LAST, memory_key, chunk_index
+		 LIMIT $6`, []any{dao.bm25.MaxDF}
+	default:
+		from, orderBy := textQuerySQL(mode)
+		return `SELECT memory_key, chunk_index, type
+		 FROM embeddings, ` + from + `
+		 WHERE search_vector @@ query
+		   AND` + candidateFilterSQL + `
+		 ORDER BY ` + orderBy + `
+		 LIMIT $6`, nil
+	}
+}
+
 // textCandidates returns up to limit chunks whose chunk_text matches
 // queryText (as interpreted by the dao's TextQueryMode), ordered by
 // descending full-text rank, at chunk granularity. An empty or all-stopword
@@ -341,16 +470,9 @@ func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, 
 		return nil, nil
 	}
 
-	from, orderBy := textQuerySQL(dao.textQuery)
-	rows, err := dao.pool.Query(ctx,
-		`SELECT memory_key, chunk_index, type
-		 FROM embeddings, `+from+`
-		 WHERE search_vector @@ query
-		   AND`+candidateFilterSQL+`
-		 ORDER BY `+orderBy+`
-		 LIMIT $6`,
-		queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil,
-	)
+	query, extraArgs := dao.textCandidatesSQL(dao.textQuery)
+	args := append([]any{queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil}, extraArgs...)
+	rows, err := dao.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("text candidates: %w", err)
 	}
