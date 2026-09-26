@@ -297,6 +297,7 @@ of the request/formatting logic. See [`connectomeClient/README.md`](connectomeCl
 - `evals/locomo/` — LoCoMo retrieval-recall eval harness (evidence recall@k per question category); see [`evals/locomo/README.md`](evals/locomo/README.md)
 - `docker-compose.yml` — `backend`, `ollama`, and the one-shot `ollama-pull` model fetcher
 - `docker-compose.gpu.yml` / `docker-compose.rocm.yml` — opt-in NVIDIA / AMD GPU overrides for `ollama`
+- `docker-compose.eval.yml` — opt-in override that publishes Ollama on `127.0.0.1:11434` for the LoCoMo eval's answer/judge calls
 - `.connectome/` — local memory volume used by the local storage manager
 
 Application-specific logic built on top of the client (e.g. a Discord bot)

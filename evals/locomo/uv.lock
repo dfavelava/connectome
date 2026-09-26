@@ -117,6 +117,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "connectomeclient" },
+    { name = "httpx" },
     { name = "python-dotenv" },
     { name = "snowballstemmer" },
 ]
@@ -130,6 +131,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "connectomeclient", editable = "../../connectomeClient" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "snowballstemmer", specifier = ">=3.1.1" },
 ]

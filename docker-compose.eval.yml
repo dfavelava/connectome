@@ -1,0 +1,19 @@
+# Opt-in override for the LoCoMo eval harness (evals/locomo), which calls the
+# compose Ollama from the host for answering and judging. Layer it on top of
+# the base file (and a GPU file, if you use one):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.eval.yml up --build
+#
+# `ollama-pull` only fetches the embedding model; pull the chat model once:
+#
+#   docker compose exec ollama ollama pull qwen3:8b
+#
+# Set OLLAMA_NUM_PARALLEL (e.g. `OLLAMA_NUM_PARALLEL=2 docker compose ...`)
+# to let Ollama serve concurrent requests, then raise the harness's LLM
+# concurrency to match.
+services:
+  ollama:
+    ports:
+      - "127.0.0.1:11434:11434"
+    environment:
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
