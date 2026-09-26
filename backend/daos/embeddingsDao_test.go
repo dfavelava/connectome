@@ -146,8 +146,8 @@ func TestEmbeddingsDaoInsertNearestNeighborsAndDelete(t *testing.T) {
 	t.Cleanup(func() { _ = dao.DeleteEmbeddingsForKey(context.Background(), key) })
 
 	rows := []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
-		{ChunkIndex: 1, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: time.Now().UTC()},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: time.Now().UTC()},
+		{ChunkIndex: 1, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: time.Now().UTC()},
 	}
 
 	if err := dao.InsertEmbeddings(ctx, key, rows); err != nil {
@@ -224,8 +224,8 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	// closeKey's chunk 0 is an exact match for the query; its chunk 1 is
 	// orthogonal (far), so a correct collapse must surface chunk 0.
 	if err := dao.InsertEmbeddings(ctx, closeKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
-		{ChunkIndex: 1, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: now},
+		{ChunkIndex: 1, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert closeKey: %v", err)
 	}
@@ -233,12 +233,12 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	// occurred_since/until filter and a since/until filter disagree on it -
 	// proving the two aren't conflated.
 	if err := dao.InsertEmbeddings(ctx, midKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: blendVector(768), Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"grace"}, CreatedAt: yesterday, OccurredAt: &occurredLastYear},
+		{ChunkIndex: 0, Embedding: blendVector(768), Model: "nomic-embed-text", Dim: 768, Type: "note", EntityIDs: []string{"grace"}, ACL: []string{}, CreatedAt: yesterday, OccurredAt: &occurredLastYear},
 	}); err != nil {
 		t.Fatalf("insert midKey: %v", err)
 	}
 	if err := dao.InsertEmbeddings(ctx, farKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 1), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{"ada"}, ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert farKey: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
 	seed := func(key string, acl []string) {
 		t.Helper()
 		if err := dao.InsertEmbeddings(ctx, key, []EmbeddingRow{
-			{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", ACL: acl, CreatedAt: now},
+			{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, ACL: acl, CreatedAt: now},
 		}); err != nil {
 			t.Fatalf("insert %s: %v", key, err)
 		}
@@ -479,12 +479,12 @@ func TestEmbeddingsDaoSearchFiltersByTomeID(t *testing.T) {
 
 	now := time.Now().UTC()
 	if err := dao.InsertEmbeddings(ctx, defaultKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert defaultKey: %v", err)
 	}
 	if err := dao.InsertEmbeddings(ctx, otherKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", TomeID: "west-marches", CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, TomeID: "west-marches", ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert otherKey: %v", err)
 	}
@@ -546,12 +546,12 @@ func TestEmbeddingsDaoDeleteEmbeddingsForTomeRemovesOnlyThatTome(t *testing.T) {
 
 	now := time.Now().UTC()
 	if err := dao.InsertEmbeddings(ctx, defaultKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert defaultKey: %v", err)
 	}
 	if err := dao.InsertEmbeddings(ctx, scopedKey, []EmbeddingRow{
-		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", TomeID: tome, CreatedAt: now},
+		{ChunkIndex: 0, Embedding: unitVector(768, 0), Model: "nomic-embed-text", Dim: 768, Type: "fact", EntityIDs: []string{}, TomeID: tome, ACL: []string{}, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("insert scopedKey: %v", err)
 	}
