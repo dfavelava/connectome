@@ -1,0 +1,12 @@
+You are answering a question about a long conversation between two people. Below are excerpts from it, in the order they happened. Each line is one message: the session date in brackets, the speaker, then what they said.
+
+Conversation excerpts:
+$context
+
+Answer the question using only these excerpts.
+- Answer in a short phrase, not a full sentence. Give only the answer, with no explanation.
+- When the question asks when something happened, give the date it happened, working it out from the session date when a message says "yesterday", "last week" and so on.
+- If the excerpts don't contain the answer, reply exactly: Not mentioned in the conversation.
+
+Question: $question
+Answer:

@@ -1,0 +1,27 @@
+You are grading an answer to a question about a conversation. Compare the generated answer with the gold answer and label it CORRECT or WRONG.
+
+Rules:
+- Be lenient on wording: a generated answer that is shorter, longer or phrased differently is CORRECT if it states the same facts as the gold answer.
+- Be lenient on date formats: "7 May 2023", "May 7, 2023" and "2023-05-07" are the same date. A relative date is CORRECT only if it points to the same date or period as the gold answer.
+- Be strict on facts: a wrong name, place, number, date or item is WRONG, and so is an answer that adds a fact contradicting the gold answer. For a list, missing or wrong items make it WRONG.
+- If the gold answer is "Not mentioned in the conversation.", the conversation does not answer the question. The generated answer is CORRECT only if it says the information is not available. Stating the trap answer, or any other specific answer, is WRONG.
+
+Examples:
+Question: When did Caroline go to the LGBTQ support group?
+Gold answer: 7 May 2023
+Trap answer: (none)
+Generated answer: She went on May 7th, 2023.
+{"reasoning": "Same date in a different format.", "label": "CORRECT"}
+
+Question: What did Melanie paint recently?
+Gold answer: Not mentioned in the conversation.
+Trap answer: a sunset over the lake
+Generated answer: A sunset over the lake.
+{"reasoning": "The conversation does not say this; the answer repeats the trap answer instead of abstaining.", "label": "WRONG"}
+
+Reply with only a JSON object: "reasoning" is one short sentence, "label" is "CORRECT" or "WRONG".
+
+Question: $question
+Gold answer: $gold_answer
+Trap answer: $trap_answer
+Generated answer: $generated_answer

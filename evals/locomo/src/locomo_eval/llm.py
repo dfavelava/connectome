@@ -78,18 +78,21 @@ class SamplingOptions:
         }
 
 
-def chat_request(model: ModelId, system: str, user: str, options: SamplingOptions) -> dict:
-    """The /api/chat request body for one non-streaming call."""
-    return {
+def chat_request(model: ModelId, system: str, user: str, options: SamplingOptions, format: dict | None = None) -> dict:
+    """The /api/chat request body for one non-streaming call. An empty system
+    prompt is left out; `format` is a JSON schema the reply must follow
+    (Ollama structured outputs)."""
+    messages = [{"role": "system", "content": system}] if system else []
+    body = {
         "model": model.name,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": [*messages, {"role": "user", "content": user}],
         "stream": False,
         "think": options.think,
         "options": options.ollama_options(),
     }
+    if format is not None:
+        body["format"] = format
+    return body
 
 
 def strip_thinking(text: str) -> str:
@@ -190,12 +193,23 @@ class LLMClient:
             await asyncio.sleep(self.backoff * 2**attempt)
         raise AssertionError("unreachable")
 
-    async def complete(self, model: str, system: str, user: str, *, stage: str = "default") -> Completion:
-        """One chat completion; usage is added to `stage`."""
+    async def complete(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        *,
+        stage: str = "default",
+        format: dict | None = None,
+        options: SamplingOptions | None = None,
+    ) -> Completion:
+        """One chat completion; usage is added to `stage`. `format` constrains the
+        reply to a JSON schema, and `options` overrides the client's for this call."""
         model_id = parse_model_id(model)
+        body = chat_request(model_id, system, user, options or self.options, format)
         async with self._semaphore:
             started = time.monotonic()
-            data = await self._request("POST", "/api/chat", chat_request(model_id, system, user, self.options))
+            data = await self._request("POST", "/api/chat", body)
             elapsed = time.monotonic() - started
         completion = Completion(
             text=strip_thinking(data.get("message", {}).get("content", "")),

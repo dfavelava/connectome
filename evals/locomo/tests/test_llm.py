@@ -242,3 +242,27 @@ def test_host_defaults(monkeypatch):
     assert LLMClient(pricing={}).host == "http://localhost:11434"
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
     assert LLMClient(pricing={}).host == "http://127.0.0.1:11434"
+
+
+def test_chat_request_format_and_empty_system():
+    schema = {"type": "object"}
+    body = chat_request(ModelId("ollama", "qwen3:8b"), "", "question", SamplingOptions(), format=schema)
+    assert body["messages"] == [{"role": "user", "content": "question"}]
+    assert body["format"] == schema
+    assert "format" not in chat_request(ModelId("ollama", "qwen3:8b"), "sys", "q", SamplingOptions())
+
+
+def test_complete_options_override():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=CHAT_RESPONSE)
+
+    async def go():
+        async with make_client(handler) as client:
+            await client.complete("ollama:qwen3:8b", "sys", "q", options=SamplingOptions(seed=9))
+            await client.complete("ollama:qwen3:8b", "sys", "q")
+
+    asyncio.run(go())
+    assert [r["options"]["seed"] for r in requests] == [9, 42]
