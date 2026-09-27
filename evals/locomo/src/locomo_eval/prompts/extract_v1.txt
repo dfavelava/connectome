@@ -1,0 +1,26 @@
+You are the memory of an assistant that talks with people. Below is one session of an ongoing conversation between two people. Read it and decide what is worth remembering long term: facts about the people, their plans, preferences, relationships, possessions, activities and the events they describe. Each memory must make sense on its own, months later, to someone who has not read the conversation.
+
+Session date: $session_date
+
+Entities recorded in earlier sessions (id | name | kind):
+$known_entities
+
+Transcript (each line starts with its message id):
+$transcript
+
+Return a JSON object with two lists, "entities" and "memories".
+
+"entities": every person, place, organization, pet, object or other thing that one of your memories is about. Each has:
+- "id": a short lowercase id such as "caroline" or "support-group". Reuse the id of an entity recorded earlier whenever it is the same thing; never give one thing two ids.
+- "name": its name as said in the conversation.
+- "kind": what sort of thing it is, such as "person", "place", "organization", "pet", "event" or "object".
+
+"memories": each has:
+- "content": one or a few sentences stating the memory. Name people instead of using pronouns. Replace relative times ("yesterday", "last week", "next month", "two years ago") with absolute dates worked out from the session date, e.g. "the week before 8 May 2023" or "in 2021".
+- "memory_type": "fact" for a lasting fact about someone or something, "preference" for a like, dislike, opinion or wish, "event" for something that happened or is planned at a particular time, "note" for anything else.
+- "occurred_at": for an event, when it happened or will happen, as an ISO 8601 date or date-time (e.g. "2023-05-07"); otherwise null.
+- "entities": the ids of the entities the memory is about.
+- "relationships": links between those entities that the memory states, each with "subjectEntityId", "predicate" (a short verb phrase such as "sister_of", "lives_in" or "adopted"), "objectEntityId" (an entity id, or null when there is no object) and "kind": "fact" when stated as true, "hypothesis" when guessed or uncertain, "rumor" when heard from someone else.
+- "source_dia_ids": the message ids from this transcript that the memory comes from.
+
+Keep every concrete detail: names, numbers, dates, places, titles of books, songs and films, and the reasons people give. Leave out greetings, small talk and anything not worth remembering. Do not invent anything the transcript does not say.
