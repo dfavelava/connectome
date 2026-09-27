@@ -161,3 +161,33 @@ docker compose exec ollama ollama pull qwen3:8b
 
 Local Ollama serves one request at a time unless `OLLAMA_NUM_PARALLEL` is
 set (the override passes it through), so keep LLM concurrency at 1-2.
+
+### Answer and judge prompts
+
+The prompts are versioned files in
+[`src/locomo_eval/prompts/`](src/locomo_eval/prompts/), loaded with
+`load_prompt("answer_v1")`, which returns `(text, version, sha256)`. The
+answer stage records each prompt's version and sha256 in the run config
+(`Prompt.config()`).
+
+**Never edit a committed prompt version.** Changing the wording, even a typo,
+means adding `answer_v2.txt` / `judge_v2.txt` and switching to it, so a
+result's recorded version always names the exact text it ran with.
+
+- `answer_v1` shows the retrieved turns sorted by date, each prefixed with its
+  session date, and the question. It asks for a short answer, or exactly
+  `Not mentioned in the conversation.` when the turns don't contain it.
+- `judge_v1` follows the Mem0/LoCoMo judge: given the question, gold answer
+  and generated answer it returns `{"reasoning": ..., "label": "CORRECT" |
+  "WRONG"}`, lenient on phrasing and date format, strict on facts. For
+  adversarial questions the gold answer is the abstention and the dataset's
+  `adversarial_answer` is shown as a trap: only abstaining is CORRECT, and
+  repeating the trap is WRONG.
+
+The judge is a small local model, so its reply is constrained with Ollama
+structured outputs (`format` set to the verdict's JSON schema) and then
+parsed strictly - no fences, extra keys or free-text labels. A malformed
+reply is retried once with the next seed (at temperature 0 the same seed
+would repeat it); if that fails too the question gets `judge_label: null`.
+Null verdicts are counted as `judge_null` next to the accuracy, which is over
+judged questions only; they are never scored as CORRECT or WRONG.
