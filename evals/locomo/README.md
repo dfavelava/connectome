@@ -191,3 +191,84 @@ reply is retried once with the next seed (at temperature 0 the same seed
 would repeat it); if that fails too the question gets `judge_label: null`.
 Null verdicts are counted as `judge_null` next to the accuracy, which is over
 judged questions only; they are never scored as CORRECT or WRONG.
+
+### Scoring answers (`locomo-eval answer`)
+
+Scoring is a second stage that runs offline over a finished retrieval run,
+with no backend calls:
+
+```bash
+uv run locomo-eval --run-id base                  # 1. retrieval, stores contexts
+uv run locomo-eval answer base \
+  --answer-model ollama:qwen3:8b --judge-model ollama:qwen3:14b   # 2. answer + judge
+```
+
+For each question it answers from the top `answer_k` stored contexts
+(default: the retrieval run's `--answer-k`; `--answer-k N` uses fewer), scores
+the answer by token F1, then asks the judge for a verdict. A failed or killed
+answer stage never re-ingests or re-queries, and one retrieval run can be
+scored by several answer and judge configs over the same contexts.
+
+**Setup.** Publish Ollama's port and pull the chat models as described under
+[LLM calls](#llm-calls-answering-and-judging) (`docker-compose.eval.yml`, then
+`docker compose exec ollama ollama pull <model>`). Model ids are
+`ollama:<exact tag>`; `OLLAMA_HOST` points the harness at another Ollama
+(default `http://localhost:11434`). The stage fails before any call if a model
+isn't pulled.
+
+**Results.** Scores are written into `results/<run-id>.json`, next to the
+retrieval metrics, under `answers.<cfg-hash>`, where the hash covers the
+models, prompt versions and sha256s, `answer_k` and sampling options:
+
+- `config` - answer and judge model ids with their Ollama digests, both
+  prompts' `{version, sha256}`, `answer_k`, temperature and options, the
+  matched `pricing.toml` entries, and any `--samples`/`--limit` subset.
+- `summary` - per category `n`, `f1`, `judge_acc` and `judge_null`, plus
+  `overall_excl_adversarial` (comparable to most published LoCoMo numbers,
+  which leave out category 5) and `overall`.
+- `usage` - per stage: calls, tokens, seconds and `cost_usd`, over every call
+  behind the scores, including ones reused from a checkpoint.
+- `questions` - each question's `id`, `answer`, `f1`, `judge_label` and
+  `judge_reasoning`.
+
+The printed table puts the retrieval and answer columns side by side, with
+`overall_excl_adversarial` before `overall`.
+
+**Prompt versions.** `--answer-prompt` / `--judge-prompt` select a prompt
+version (default `answer_v1` / `judge_v1`); see
+[Answer and judge prompts](#answer-and-judge-prompts). A new version is a new
+config, so its scores sit beside the old ones.
+
+**Resuming.** Every finished stage call is appended to
+`results/<run-id>.<cfg-hash>.jsonl` and fsynced, keyed by question, stage,
+model, prompt version and sha256, a hash of the call's inputs, and the
+sampling options. Rerunning the same command skips everything already there,
+so a killed run loses only the calls in flight. The answer's input hash
+covers the question and the contexts it was shown, so a changed context (say,
+after re-running retrieval under the same id) forces a fresh answer, and a
+changed answer forces a fresh verdict. Answers and verdicts are cached
+separately and every checkpoint of the run is read, so changing only the
+judge model or prompt reuses the answers already computed.
+
+**Quick check.** `--limit N` scores the first N questions and `--samples
+conv-26` one conversation; both reuse the same checkpoint, so a later full
+run picks up where they stopped. Progress, with calls made, calls reused,
+output tokens/sec and an ETA, is printed every few seconds.
+
+**How long it takes.** A full run is ~1,980 questions x 2 calls (plus a rare
+judge retry). Rough figures for an 8B answer model and a 14B judge, which vary
+a lot with hardware:
+
+| Setup | Per call | Full run |
+| --- | --- | --- |
+| CPU only (8-16 cores) | ~5-20 s | ~6-20 hours |
+| GPU (`docker-compose.gpu.yml` / `docker-compose.rocm.yml`) | ~0.3-1 s | ~20-60 minutes |
+
+Time `--samples conv-26` (~150 questions) first and scale by ~13x.
+
+**Judge reliability.** A small local judge is noisier than the hosted judges
+behind published LoCoMo numbers, so `judge_acc` compares our own runs with
+each other, not with papers; token F1 is the number that compares with
+published results. Use a judge at least as large as the answer model, ideally
+from another model family, and spot-check its labels with `--judge-sample N`,
+which prints N random judged items (question, gold, answer, label, reasoning).

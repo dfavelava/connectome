@@ -5,6 +5,9 @@ Each conversation is ingested into its own scratch tome
 evidence is then sent to recall, the returned memory keys are mapped back to
 dialog ids, and evidence recall@k / hit@k are computed per category. The tome
 is destroyed as soon as its conversation is scored, including on failure.
+
+`locomo-eval answer <run-id> ...` then scores a finished run's answers
+offline; see `locomo-eval answer --help`.
 """
 
 import argparse
@@ -23,6 +26,7 @@ import httpx
 from connectomeclient import ConnectomeClient
 from dotenv import load_dotenv
 
+from locomo_eval import answering
 from locomo_eval.dataset import Sample, Turn, load_dataset
 from locomo_eval.metrics import Context, QuestionResult, summarize
 
@@ -250,6 +254,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     load_dotenv()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["answer"]:
+        answering.main(argv[1:])
+        return
     args = parse_args(argv)
     if not args.data.exists():
         sys.exit(f"dataset not found at {args.data}; see evals/locomo/README.md for the download")
