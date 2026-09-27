@@ -272,3 +272,58 @@ each other, not with papers; token F1 is the number that compares with
 published results. Use a judge at least as large as the answer model, ideally
 from another model family, and spot-check its labels with `--judge-sample N`,
 which prints N random judged items (question, gold, answer, label, reasoning).
+
+### Extracting memories (`locomo-eval extract`)
+
+The retrieval run stores every dialog turn as a memory, so it only tests
+search. The extract stage tests what Connectome would hold if an agent chose
+the memories: a local LLM reads each conversation and decides what to
+remember. It **never sees the QA items**.
+
+```bash
+uv run locomo-eval extract --samples conv-26 --extractor-model ollama:qwen3:8b
+```
+
+Set up Ollama as under [LLM calls](#llm-calls-answering-and-judging); the GPU
+override (`docker-compose.gpu.yml` / `docker-compose.rocm.yml`) is strongly
+recommended, since each call generates a few thousand tokens.
+
+**How it works.** Each conversation is extracted one session at a time, in
+order. Each call sees the session transcript with its dialog ids
+(`D3:7 Caroline: ...`) and date, the entities recorded in earlier sessions
+(`id | name | kind`, so ids stay the same across sessions), and the
+extraction prompt ([`extract_v1`](src/locomo_eval/prompts/extract_v1.txt)),
+which is generic and says nothing about LoCoMo's question categories. It
+returns entities and memories, each with:
+
+- `content` - self-contained text, relative dates resolved from the session date;
+- `memory_type` (`note`/`fact`/`preference`/`event`) and `occurred_at`;
+- `entities` and `relationships` (`subjectEntityId`/`predicate`/`objectEntityId`/`kind`);
+- `source_dia_ids` - provenance, used only for scoring.
+
+The reply is constrained with Ollama structured outputs and validated. A reply
+with the wrong shape is retried with the next seed (`--attempts`, default 3),
+then recorded as a failed session; the run carries on. Within a valid reply,
+source ids not in the session, entity references to unknown entities,
+relationships with unknown endpoints and unparseable `occurred_at` values are
+dropped and counted under `dropped`. Entity ids are normalized to lowercase
+with hyphens.
+
+**Keeping the questions out.** The extractor's input is built from
+`Sample.turns` only: `sessions_of` and `extract_sample` take a sample's turns,
+not the sample, and the extractor interface has no parameter that could
+carry QA items. A test checks that no question or answer text appears in any
+prompt.
+
+**Cache.** Results go to `results/extractions.jsonl` (`--cache`), one fsynced
+line per session, keyed by dataset sha256, sample, session, extractor model,
+prompt version and sha256, and sampling options. Each record also holds the
+model's Ollama digest, the entity ids it was shown, token counts and wall
+time. A rerun skips sessions already extracted - a fully cached run makes no
+LLM calls and doesn't need Ollama - and retries failed ones. If an earlier
+session is re-extracted, later cached sessions keep the entities they were
+extracted with.
+
+`--concurrency N` extracts N conversations at once; sessions within a
+conversation always run in order, since each depends on the entities before it.
+A new prompt version is a new cache key, so its results sit beside the old ones.

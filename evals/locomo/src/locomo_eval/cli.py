@@ -7,7 +7,8 @@ dialog ids, and evidence recall@k / hit@k are computed per category. The tome
 is destroyed as soon as its conversation is scored, including on failure.
 
 `locomo-eval answer <run-id> ...` then scores a finished run's answers
-offline; see `locomo-eval answer --help`.
+offline; see `locomo-eval answer --help`. `locomo-eval extract ...` has a
+local LLM choose the memories to store instead; see `locomo-eval extract --help`.
 """
 
 import argparse
@@ -26,7 +27,7 @@ import httpx
 from connectomeclient import ConnectomeClient
 from dotenv import load_dotenv
 
-from locomo_eval import answering
+from locomo_eval import answering, extraction
 from locomo_eval.dataset import Sample, Turn, load_dataset
 from locomo_eval.metrics import Context, QuestionResult, summarize
 
@@ -257,6 +258,9 @@ def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["answer"]:
         answering.main(argv[1:])
+        return
+    if argv[:1] == ["extract"]:
+        extraction.main(argv[1:])
         return
     args = parse_args(argv)
     if not args.data.exists():
