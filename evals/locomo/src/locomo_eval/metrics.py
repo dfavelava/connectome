@@ -68,3 +68,38 @@ def summarize(results: list[QuestionResult], ks: list[int]) -> dict[str, dict[st
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+ADVERSARIAL_CATEGORY = "adversarial"
+
+
+def summarize_answers(questions: list[dict]) -> dict[str, dict[str, float | int | None]]:
+    """Mean token F1 and judge accuracy per category, plus "overall" and
+    "overall_excl_adversarial" (most published LoCoMo numbers leave out the
+    adversarial category).
+
+    Each question is a dict with "category", "f1" and "judge_label"
+    (CORRECT, WRONG, or None when the judge's reply never parsed). Judge
+    accuracy is over judged questions only, with the null count beside it;
+    None when nothing was judged. Categories come sorted, then the two
+    overall rows."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for question in questions:
+        groups[question["category"]].append(question)
+        groups["overall"].append(question)
+        if question["category"] != ADVERSARIAL_CATEGORY:
+            groups["overall_excl_adversarial"].append(question)
+
+    overall_rows = ("overall_excl_adversarial", "overall")
+    summary: dict[str, dict[str, float | int | None]] = {}
+    for name in [*sorted(g for g in groups if g not in overall_rows), *overall_rows]:
+        group = groups.get(name, [])
+        labels = [q["judge_label"] for q in group]
+        correct, wrong = labels.count("CORRECT"), labels.count("WRONG")
+        summary[name] = {
+            "n": len(group),
+            "f1": _mean([q["f1"] for q in group]),
+            "judge_acc": correct / (correct + wrong) if correct + wrong else None,
+            "judge_null": len(group) - correct - wrong,
+        }
+    return summary
