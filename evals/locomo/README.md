@@ -414,8 +414,9 @@ one stage under a time limit, and leaves `results/` as the version's output.
 2. Import the notebook, set **Accelerator: GPU** and **Internet: on**, and add
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
-3. Set `STAGE` and the models in the first cell, then **Save Version -> Save &
-   Run All (Commit)**. The run continues with the browser closed.
+3. Set `STAGE` and the models in the first cell (and, for `extract`,
+   `EXTRACT_PROMPT`: `extract_v1` or `lifecycle_v1`), then **Save Version ->
+   Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
 
 To resume a stopped run, add the previous version's output as an input and
@@ -436,6 +437,11 @@ so it is cached beside the add-only extraction under its own prompt version:
 uv run locomo-eval extract --samples conv-26 --extractor-model ollama:qwen3:8b                                  # add-only
 uv run locomo-eval extract --samples conv-26 --extractor-model ollama:qwen3:8b --extract-prompt lifecycle_v1    # lifecycle
 ```
+
+On Kaggle, set `EXTRACT_PROMPT = "lifecycle_v1"` in the notebook's first cell.
+Commit the add-only and lifecycle runs as separate versions with the same
+`EXTRACTOR_MODEL` and `SAMPLES`, attaching the earlier version's output so both
+end up in one `extractions.jsonl`, then score them locally as below.
 
 **How it works.** Sessions still run in order. Before each one, the
 conversation's own earlier memories - what its tome would hold after the
