@@ -390,3 +390,28 @@ Recall ranks on memory content only today: entities and relationships are
 stored but don't affect ranking, so this measures extracted text against raw
 turns, not the graph. Storing them now lets graph-expanded recall be measured
 later on the same cached extraction.
+
+### Running the LLM stages on Kaggle
+
+The `extract` and `answer` stages only need Ollama and the harness - not the
+backend - so they can run on a free Kaggle GPU (a T4 x2 or P100, about 30 GPU
+hours a week) while retrieval runs on your own machine.
+[`kaggle.ipynb`](kaggle.ipynb) does the whole session: it installs Ollama and
+uv, clones this repository, pulls the models, restores earlier results, runs
+one stage under a time limit, and leaves `results/` as the version's output.
+
+1. On Kaggle, verify your phone number, then create a **private** dataset
+   (LoCoMo is CC BY-NC) with `locomo10.json` and, for the `answer` stage, the
+   retrieval run's `results/<run-id>.json`.
+2. Import the notebook, set **Accelerator: GPU** and **Internet: on**, and add
+   the dataset as an input. For a private repository, add a GitHub token as
+   the secret `GITHUB_TOKEN`.
+3. Set `STAGE` and the models in the first cell, then **Save Version -> Save &
+   Run All (Commit)**. The run continues with the browser closed.
+4. Download `results/` from the version's Output tab.
+
+To resume a stopped run, add the previous version's output as an input and
+commit again: the notebook merges every attached `results/` folder back in,
+and the stage skips work already cached. The stage stops itself after
+`TIME_LIMIT_HOURS` (default 11) so the output is saved before Kaggle's
+~12-hour limit. Time `SAMPLES = "conv-26"` first; a full run is about 13x that.
