@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import re
+from dataclasses import asdict
 
 import pytest
 
@@ -10,6 +11,7 @@ from locomo_eval import cli, extraction
 from locomo_eval.dataset import CATEGORY_NAMES, parse_sample
 from locomo_eval.extraction import (
     EXTRACT,
+    EXTRACT_MAX_NUM_PREDICT,
     EXTRACT_OPTIONS,
     EXTRACT_VERSION,
     EXTRACTION_SCHEMA,
@@ -27,7 +29,7 @@ from locomo_eval.extraction import (
     pending_sessions,
     sessions_of,
 )
-from locomo_eval.llm import Completion, SamplingOptions
+from locomo_eval.llm import RETRY_TEMPERATURE, Completion, SamplingOptions
 from locomo_eval.prompts import PROMPTS_DIR, load_prompt
 from tests.test_dataset import RAW_SAMPLE
 
@@ -63,7 +65,8 @@ def memory(content="Caroline said hello.", sources=("D1:1",), entities=(), relat
 
 
 class FakeLLM:
-    """Stands in for LLMClient. Replies from `script` in order when given,
+    """Stands in for LLMClient. Replies from `script` in order when given
+    (strings, or Completions to control token counts and done_reason),
     else with one valid memory citing the transcript's first dialog id and
     an entity for Caroline. Every call reports 1000 input and 100 output tokens."""
 
@@ -75,7 +78,8 @@ class FakeLLM:
         self.calls.append({"model": model, "system": system, "user": user, "stage": stage, "format": format, "options": options})
         await asyncio.sleep(0)
         if self.script:
-            return Completion(self.script.pop(0), 1000, 100)
+            item = self.script.pop(0)
+            return item if isinstance(item, Completion) else Completion(item, 1000, 100)
         first = re.search(r"^(D\d+:\d+) ", user, re.MULTILINE).group(1)
         text = reply(
             [memory(f"Caroline spoke in {first}.", sources=[first], entities=["caroline"])],
@@ -226,7 +230,74 @@ def test_extractor_retries_invalid_reply_with_next_seed():
     assert result.attempts == 2
     assert (result.input_tokens, result.output_tokens) == (2000, 200)
     assert [c["options"].seed for c in llm.calls] == [EXTRACT_OPTIONS.seed, EXTRACT_OPTIONS.seed + 1]
+    # The first attempt is the configured options; the retry samples, so its seed matters.
+    assert llm.calls[0]["options"] == EXTRACT_OPTIONS
+    assert llm.calls[1]["options"].temperature == RETRY_TEMPERATURE
+    assert llm.calls[1]["options"].num_predict == EXTRACT_OPTIONS.num_predict
+    assert result.options == llm.calls[1]["options"]
+    assert result.truncated == 0
     assert all(c["format"] == EXTRACTION_SCHEMA and c["stage"] == EXTRACT for c in llm.calls)
+
+
+def cut_off(num_predict: int = EXTRACT_OPTIONS.num_predict, input_tokens: int = 2736) -> Completion:
+    """A reply stopped at the output cap: unterminated JSON, as Ollama returns it."""
+    return Completion('{"entities": [], "memories": [{"content": "Caroline said', input_tokens, num_predict, "length")
+
+
+def test_extractor_retries_truncated_reply_with_larger_cap():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[0]
+    llm = FakeLLM([cut_off(), reply([memory()])])
+    result = run(extractor(llm).extract(session, []))
+    assert result.status == OK
+    assert (result.attempts, result.truncated) == (2, 1)
+    first, retry = (c["options"] for c in llm.calls)
+    assert first == EXTRACT_OPTIONS
+    assert retry.num_predict == 2 * EXTRACT_OPTIONS.num_predict
+    assert retry.temperature == RETRY_TEMPERATURE
+    assert retry.seed == EXTRACT_OPTIONS.seed + 1
+    # 2736 + 8192 fits in the configured context, so it isn't changed (a change reloads the model).
+    assert retry.num_ctx == EXTRACT_OPTIONS.num_ctx
+
+
+def test_truncated_session_fails_with_clear_error_and_cap_stops_growing():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[0]
+    llm = FakeLLM([cut_off(4096), cut_off(8192), cut_off(8192)])
+    result = run(extractor(llm).extract(session, []))
+    assert result.status == FAILED
+    assert result.truncated == 3
+    assert [c["options"].num_predict for c in llm.calls] == [4096, 8192, EXTRACT_MAX_NUM_PREDICT]
+    assert result.error == f"reply truncated at the {EXTRACT_MAX_NUM_PREDICT}-token output cap (num_predict)"
+
+
+def test_truncation_is_detected_from_token_count_without_done_reason():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[0]
+    llm = FakeLLM([Completion("{", 100, EXTRACT_OPTIONS.num_predict), reply([memory()])])
+    result = run(extractor(llm).extract(session, []))
+    assert (result.status, result.truncated) == (OK, 1)
+    assert llm.calls[1]["options"].num_predict == 2 * EXTRACT_OPTIONS.num_predict
+
+
+def test_truncation_retry_grows_context_when_prompt_and_cap_do_not_fit():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[0]
+    llm = FakeLLM([cut_off(4096, input_tokens=10_000), reply([memory()])])
+    run(extractor(llm).extract(session, []))
+    assert llm.calls[1]["options"].num_ctx >= 10_000 + 8192
+
+
+def test_retried_session_is_cached_under_the_configured_options(tmp_path):
+    path = tmp_path / "cache.jsonl"
+    llm = FakeLLM([cut_off(), reply([memory()]), reply([memory("Melanie shared a photo.", sources=["D2:2"])])])
+    run(extract_sample(extractor(llm), ExtractionCache(path), DATASET_SHA, SAMPLE.sample_id, SAMPLE.turns))
+    first, second = (json.loads(line) for line in path.read_text().splitlines())
+    assert first["options"] == second["options"] == asdict(EXTRACT_OPTIONS)
+    assert first["options_hash"] == second["options_hash"]
+    assert first["truncated_attempts"] == 1
+    assert first["attempt_options"]["num_predict"] == 2 * EXTRACT_OPTIONS.num_predict
+    assert second["attempt_options"] == asdict(EXTRACT_OPTIONS)
+    # A later run finds both, retried or not.
+    rerun = FakeLLM()
+    run(extract_sample(extractor(rerun), ExtractionCache(path), DATASET_SHA, SAMPLE.sample_id, SAMPLE.turns))
+    assert rerun.calls == []
 
 
 def test_extractor_gives_up_after_bounded_attempts():

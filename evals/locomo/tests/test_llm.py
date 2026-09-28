@@ -6,6 +6,7 @@ import pytest
 
 from locomo_eval.llm import (
     DEFAULT_PRICING_PATH,
+    RETRY_TEMPERATURE,
     Completion,
     LLMClient,
     LLMError,
@@ -16,6 +17,7 @@ from locomo_eval.llm import (
     load_pricing,
     parse_model_id,
     price_for,
+    retry_options,
     strip_thinking,
 )
 
@@ -266,3 +268,26 @@ def test_complete_options_override():
 
     asyncio.run(go())
     assert [r["options"]["seed"] for r in requests] == [9, 42]
+
+
+def test_complete_reports_truncation():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**CHAT_RESPONSE, "done_reason": "length"})
+
+    async def go():
+        async with make_client(handler) as client:
+            return await client.complete("ollama:qwen3:8b", "sys", "q")
+
+    completion = asyncio.run(go())
+    assert completion.done_reason == "length"
+    assert completion.truncated
+    assert not Completion("Paris", 1, 1, "stop").truncated
+    assert not Completion("Paris", 1, 1).truncated
+
+
+def test_retry_options():
+    base = SamplingOptions(seed=7, num_predict=64)
+    assert retry_options(base, 0) is base
+    assert retry_options(base, 2) == SamplingOptions(seed=9, num_predict=64, temperature=RETRY_TEMPERATURE)
+    # A base temperature above the retry temperature is kept.
+    assert retry_options(SamplingOptions(temperature=0.8), 1).temperature == 0.8

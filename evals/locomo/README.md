@@ -187,8 +187,9 @@ result's recorded version always names the exact text it ran with.
 The judge is a small local model, so its reply is constrained with Ollama
 structured outputs (`format` set to the verdict's JSON schema) and then
 parsed strictly - no fences, extra keys or free-text labels. A malformed
-reply is retried once with the next seed (at temperature 0 the same seed
-would repeat it); if that fails too the question gets `judge_label: null`.
+reply is retried once with the next seed at temperature 0.3 (at temperature 0
+decoding is greedy, so a new seed alone would repeat the reply); if that fails
+too the question gets `judge_label: null`.
 Null verdicts are counted as `judge_null` next to the accuracy, which is over
 judged questions only; they are never scored as CORRECT or WRONG.
 
@@ -302,8 +303,15 @@ returns entities and memories, each with:
 - `source_dia_ids` - provenance, used only for scoring.
 
 The reply is constrained with Ollama structured outputs and validated. A reply
-with the wrong shape is retried with the next seed (`--attempts`, default 3),
-then recorded as a failed session; the run carries on. Within a valid reply,
+with the wrong shape is retried (`--attempts`, default 3), then recorded as a
+failed session; the run carries on. The first attempt runs at temperature 0
+with a 4,096-token output cap; retries take the next seed at temperature 0.3,
+since at temperature 0 the seed is ignored and the reply would repeat. A reply
+cut off at the cap (Ollama's `done_reason: "length"`, which otherwise shows up
+as unterminated JSON) is retried with twice the cap, up to 8,192 tokens, and a
+larger context if the prompt and cap no longer fit. Only retries change, so the
+cache key - and every cached session - stays the same; each record also stores
+the `attempt_options` its result came from and its `truncated_attempts`. Within a valid reply,
 source ids not in the session, entity references to unknown entities,
 relationships with unknown endpoints and unparseable `occurred_at` values are
 dropped and counted under `dropped`. Entity ids are normalized to lowercase

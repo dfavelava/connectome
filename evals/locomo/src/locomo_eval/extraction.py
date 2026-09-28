@@ -17,9 +17,11 @@ Each call sees the session transcript with its dialog ids and date, and the
 entities recorded in earlier sessions, so entity ids stay the same across
 sessions. The reply is constrained with Ollama structured outputs
 (EXTRACTION_SCHEMA) and validated; a reply that fails validation is retried
-with the next seed, and after `attempts` tries the session is recorded as
-failed without aborting the run. Source ids that aren't in the session, and
-entity references to entities that don't exist, are dropped and counted.
+with the next seed at a small temperature, and after `attempts` tries the
+session is recorded as failed without aborting the run. A reply cut off at the
+output cap is retried with twice the cap, up to EXTRACT_MAX_NUM_PREDICT.
+Source ids that aren't in the session, and entity references to entities that
+don't exist, are dropped and counted.
 
 Results are appended to a JSONL cache (fsynced per line), one record per
 session, keyed by dataset sha256, sample, session, extractor model, prompt
@@ -43,7 +45,13 @@ from pathlib import Path
 from typing import Protocol
 
 from locomo_eval.dataset import Turn, load_dataset, normalize_evidence
-from locomo_eval.llm import LLMClient, LLMError, SamplingOptions, load_pricing
+from locomo_eval.llm import (
+    LLMClient,
+    LLMError,
+    SamplingOptions,
+    load_pricing,
+    retry_options,
+)
 from locomo_eval.prompts import Prompt, load_prompt
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -63,6 +71,10 @@ RELATIONSHIP_KINDS = ("fact", "hypothesis", "rumor")
 # A session transcript plus the known entities, and a few thousand tokens of
 # memories back.
 EXTRACT_OPTIONS = SamplingOptions(num_ctx=16384, num_predict=4096)
+# The output cap a retry may grow to after a reply was cut off at the cap.
+EXTRACT_MAX_NUM_PREDICT = 8192
+# Context left over the prompt and output when a retry needs a larger num_ctx.
+_CTX_MARGIN = 256
 
 _ENTITY_SCHEMA = {
     "type": "object",
@@ -333,6 +345,10 @@ class SessionExtraction:
     seconds: float
     # The last validation error, when status is FAILED.
     error: str | None = None
+    # The options of the last attempt, which differ from the extractor's on a retry.
+    options: SamplingOptions | None = None
+    # Attempts whose reply was cut off at num_predict.
+    truncated: int = 0
 
 
 class Extractor(Protocol):
@@ -349,35 +365,49 @@ class Extractor(Protocol):
 class OllamaExtractor:
     """An Extractor on a local Ollama model, via LLMClient and structured outputs.
 
-    A reply that fails validation is retried with the next seed - at
-    temperature 0 the same seed would repeat it. Transport errors are the
-    client's to retry and still raise."""
+    The first attempt uses `options` as given. A reply that fails validation
+    is retried with the next seed at RETRY_TEMPERATURE - at temperature 0
+    decoding is greedy, so a new seed alone would repeat the reply. A reply cut
+    off at num_predict is also retried with twice the cap (up to
+    `max_num_predict`), and num_ctx grows if the prompt and cap no longer fit.
+    Since only retries change, cached first-attempt results stay valid.
+    Transport errors are the client's to retry and still raise."""
 
-    def __init__(self, client: LLMClient, model: str, prompt: Prompt, *, options: SamplingOptions = EXTRACT_OPTIONS, attempts: int = EXTRACT_ATTEMPTS):
+    def __init__(self, client: LLMClient, model: str, prompt: Prompt, *, options: SamplingOptions = EXTRACT_OPTIONS, attempts: int = EXTRACT_ATTEMPTS, max_num_predict: int = EXTRACT_MAX_NUM_PREDICT):
         self.client = client
         self.model = model
         self.prompt = prompt
         self.options = options
         self.attempts = attempts
+        self.max_num_predict = max_num_predict
 
     async def extract(self, session: Session, known_entities: Sequence[Entity]) -> SessionExtraction:
         text = extraction_prompt(self.prompt, session, known_entities)
         known_ids = [e.id for e in known_entities]
-        input_tokens = output_tokens = 0
+        input_tokens = output_tokens = truncated = 0
+        num_predict, num_ctx = self.options.num_predict, self.options.num_ctx
         error = None
+        options = self.options
         started = time.monotonic()
         for attempt in range(self.attempts):
-            options = replace(self.options, seed=self.options.seed + attempt)
+            options = replace(retry_options(self.options, attempt), num_predict=num_predict, num_ctx=num_ctx)
             completion = await self.client.complete(self.model, "", text, stage=EXTRACT, format=EXTRACTION_SCHEMA, options=options)
             input_tokens += completion.input_tokens
             output_tokens += completion.output_tokens
+            # Ollama reports done_reason "length"; the count is a fallback for servers that don't.
+            if completion.truncated or completion.output_tokens >= options.num_predict:
+                truncated += 1
+                error = f"reply truncated at the {options.num_predict}-token output cap (num_predict)"
+                num_predict = min(num_predict * 2, max(self.max_num_predict, num_predict))
+                num_ctx = max(num_ctx, completion.input_tokens + num_predict + _CTX_MARGIN)
+                continue
             try:
                 extraction = parse_extraction(completion.text, session.dia_ids, known_ids)
             except ExtractionParseError as exc:
                 error = str(exc)
                 continue
-            return SessionExtraction(OK, extraction, attempt + 1, input_tokens, output_tokens, time.monotonic() - started)
-        return SessionExtraction(FAILED, None, self.attempts, input_tokens, output_tokens, time.monotonic() - started, error)
+            return SessionExtraction(OK, extraction, attempt + 1, input_tokens, output_tokens, time.monotonic() - started, options=options, truncated=truncated)
+        return SessionExtraction(FAILED, None, self.attempts, input_tokens, output_tokens, time.monotonic() - started, error, options=options, truncated=truncated)
 
 
 # --- Cache ------------------------------------------------------------------
@@ -455,6 +485,9 @@ def session_record(dataset_sha256: str, session: Session, extractor: Extractor, 
         "memories": [asdict(m) for m in extraction.memories] if extraction else [],
         "dropped": extraction.dropped if extraction else {},
         "attempts": result.attempts,
+        # The options of the attempt recorded here; they differ from "options" after a retry.
+        "attempt_options": asdict(result.options) if result.options else None,
+        "truncated_attempts": result.truncated,
         "error": result.error,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,

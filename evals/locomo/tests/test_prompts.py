@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from locomo_eval.llm import LLMClient
+from locomo_eval.llm import RETRY_TEMPERATURE, LLMClient
 from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
     ANSWER_VERSION,
@@ -140,10 +140,12 @@ def test_judge_requests_structured_output():
     assert usage[0]["stage"] == "judge"
 
 
-def test_judge_retries_malformed_reply_once_with_new_seed():
+def test_judge_retries_malformed_reply_once_with_new_seed_and_temperature():
     result, requests, _ = run_judge(["CORRECT", '{"reasoning": "Wrong city.", "label": "WRONG"}'])
     assert result == JudgeResult(judge_label="WRONG", judge_reasoning="Wrong city.", attempts=2)
     assert [r["options"]["seed"] for r in requests] == [42, 43]
+    # At temperature 0 the new seed would be ignored and the reply repeated.
+    assert [r["options"]["temperature"] for r in requests] == [0.0, RETRY_TEMPERATURE]
 
 
 def test_judge_records_null_after_second_malformed_reply():
