@@ -8,21 +8,22 @@ braces in the judge's examples alone.
 
 The judge runs on a small local model, so its reply is constrained with
 Ollama structured outputs (JUDGE_SCHEMA) and then parsed strictly. A reply
-that still doesn't parse is retried once with a different seed - at
-temperature 0 the same seed would return the same reply - and after that
-recorded as a null label, which summaries count rather than score.
+that still doesn't parse is retried once with the next seed at
+RETRY_TEMPERATURE - at temperature 0 decoding is greedy and would return the
+same reply whatever the seed - and after that recorded as a null label, which
+summaries count rather than score.
 """
 
 import hashlib
 import json
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from string import Template
 from typing import NamedTuple
 
-from locomo_eval.llm import LLMClient
+from locomo_eval.llm import LLMClient, retry_options
 from locomo_eval.metrics import Context
 from locomo_eval.scoring import ADVERSARIAL
 
@@ -151,10 +152,11 @@ class JudgeResult:
 
 async def judge(client: LLMClient, model: str, prompt_text: str, *, attempts: int = JUDGE_ATTEMPTS) -> JudgeResult:
     """Ask the judge for a verdict, retrying a malformed reply with the next
-    seed. Transport errors are the client's to retry and still raise."""
+    seed at RETRY_TEMPERATURE. Transport errors are the client's to retry and
+    still raise."""
     error = None
     for attempt in range(attempts):
-        options = replace(client.options, seed=client.options.seed + attempt)
+        options = retry_options(client.options, attempt)
         completion = await client.complete(model, "", prompt_text, stage="judge", format=JUDGE_SCHEMA, options=options)
         try:
             verdict = parse_judge_output(completion.text)

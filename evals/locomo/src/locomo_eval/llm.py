@@ -21,7 +21,7 @@ import os
 import re
 import time
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -31,6 +31,13 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_PRICING_PATH = PROJECT_DIR / "pricing.toml"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 PROVIDERS = ("ollama",)
+
+# Retries of a malformed reply sample at this temperature. At temperature 0
+# decoding is greedy, so the seed is ignored and a retry with the same options
+# would only repeat the reply.
+RETRY_TEMPERATURE = 0.3
+# Ollama's done_reason when a reply stopped at num_predict.
+LENGTH_STOP = "length"
 
 # Reasoning models may still emit their thinking inline; it is never part of the answer.
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -76,6 +83,15 @@ class SamplingOptions:
             "num_ctx": self.num_ctx,
             "num_predict": self.num_predict,
         }
+
+
+def retry_options(options: SamplingOptions, attempt: int) -> SamplingOptions:
+    """The options for a retry: attempt 0 is `options` unchanged; later
+    attempts take the next seed and sample at RETRY_TEMPERATURE, so the seed
+    actually changes the reply."""
+    if attempt == 0:
+        return options
+    return replace(options, seed=options.seed + attempt, temperature=max(options.temperature, RETRY_TEMPERATURE))
 
 
 def chat_request(model: ModelId, system: str, user: str, options: SamplingOptions, format: dict | None = None) -> dict:
@@ -127,6 +143,13 @@ class Completion(NamedTuple):
     text: str
     input_tokens: int
     output_tokens: int
+    # Why generation stopped, as Ollama reports it: "stop", or LENGTH_STOP
+    # when the reply was cut off at num_predict.
+    done_reason: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.done_reason == LENGTH_STOP
 
 
 @dataclass
@@ -215,6 +238,7 @@ class LLMClient:
             text=strip_thinking(data.get("message", {}).get("content", "")),
             input_tokens=data.get("prompt_eval_count", 0),
             output_tokens=data.get("eval_count", 0),
+            done_reason=data.get("done_reason"),
         )
         usage = self.usage.setdefault((stage, str(model_id)), StageUsage())
         usage.calls += 1
