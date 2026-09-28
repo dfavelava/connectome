@@ -1,12 +1,22 @@
 import argparse
 import asyncio
 import copy
+import hashlib
+import json
 
 import pytest
 
 from locomo_eval import cli
 from locomo_eval.dataset import parse_sample
-from locomo_eval.metrics import Context
+from locomo_eval.extraction import (
+    EXTRACT_OPTIONS,
+    EXTRACT_VERSION,
+    ExtractionCache,
+    cached_run,
+    options_hash,
+)
+from locomo_eval.metrics import Context, summarize
+from locomo_eval.prompts import load_prompt
 from tests.test_dataset import RAW_SAMPLE
 
 
@@ -23,8 +33,10 @@ class FakeClient:
         self.recall_calls: list[dict] = []
         self.fail_recall = False
 
-    async def remember(self, content, memory_type, tome, occurred_at):
-        self.remember_calls.append({"content": content, "tome": tome, "occurred_at": occurred_at})
+    async def remember(self, content, memory_type, tome, occurred_at, entities=None, relationships=None):
+        self.remember_calls.append(
+            {"content": content, "memory_type": memory_type, "tome": tome, "occurred_at": occurred_at, "entities": entities, "relationships": relationships}
+        )
         key = f"mem_{len(self.remember_calls)}.md"
         self.tomes.setdefault(tome, {})[key] = content
         return {"key": key}
@@ -53,7 +65,7 @@ def client():
 
 
 def args(**overrides):
-    defaults = {"ks": [1, 5], "answer_k": 10, "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None}
+    defaults = {"ks": [1, 5], "answer_k": 10, "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None, "ingest": "turns"}
     return argparse.Namespace(**{**defaults, **overrides})
 
 
@@ -116,7 +128,7 @@ def test_ks_parsing():
 def test_reuse_tomes_queries_kept_tomes_without_ingesting(client):
     sample = parse_sample(RAW_SAMPLE)
     _, _, key_maps = asyncio.run(cli.run(client, args(keep_tomes=True), [sample], "r6"))
-    assert set(key_maps["conv-1"].values()) == {t.dia_id for t in sample.turns}
+    assert set(key_maps["conv-1"].values()) == {(t.dia_id,) for t in sample.turns}
     ingested = len(client.remember_calls)
 
     results, _, reused = asyncio.run(cli.run(client, args(), [sample], "r6", key_maps))
@@ -154,3 +166,210 @@ def test_recall_k_covers_answer_k():
 def test_memory_body_strips_frontmatter():
     assert cli.memory_body("---\ntype: event\ntags: []\n---\n[date] A: hi\n") == "[date] A: hi"
     assert cli.memory_body("no frontmatter") == "no frontmatter"
+
+
+# --- Extracted ingestion ------------------------------------------------------
+
+EXTRACTOR = "ollama:fake-extractor"
+
+
+def extraction_record(dataset_sha256, session, memories, entities=(), status="ok"):
+    prompt = load_prompt(EXTRACT_VERSION)
+    return {
+        "dataset_sha256": dataset_sha256,
+        "sample_id": "conv-1",
+        "session": session,
+        "extractor_model": EXTRACTOR,
+        "model_digest": "sha256:fake",
+        "prompt_version": prompt.version,
+        "prompt_sha256": prompt.sha256,
+        "options_hash": options_hash(EXTRACT_OPTIONS),
+        "options": {},
+        "status": status,
+        "entities": [{"id": e, "name": e.title(), "kind": "person"} for e in entities],
+        "memories": memories if status == "ok" else [],
+        "dropped": {"source_dia_ids": 1} if status == "ok" else {},
+        "attempts": 1 if status == "ok" else 3,
+        "error": None if status == "ok" else "bad reply",
+        "input_tokens": 1000,
+        "output_tokens": 100,
+        "seconds": 2.5,
+    }
+
+
+def extracted_memory(content, sources, entities=(), relationships=(), occurred_at=None, memory_type="fact"):
+    return {
+        "content": content,
+        "memory_type": memory_type,
+        "occurred_at": occurred_at,
+        "entities": list(entities),
+        "relationships": list(relationships),
+        "source_dia_ids": list(sources),
+    }
+
+
+# Session 1's memories cite both of its turns; session 2 failed, so D2:1 is
+# cited by nothing.
+SESSION_1 = [
+    extracted_memory(
+        "Caroline greeted Melanie and Melanie shared a sunset photo.",
+        ["D1:1", "D1:2"],
+        entities=["caroline", "melanie"],
+        relationships=[{"subjectEntityId": "caroline", "predicate": "friend_of", "objectEntityId": "melanie", "kind": "fact"}],
+        occurred_at="2023-05-08T00:00:00+00:00",
+        memory_type="event",
+    ),
+    extracted_memory("Melanie likes sunsets.", ["D1:2"], entities=["melanie"], memory_type="preference"),
+    extracted_memory("Caroline is friendly.", [], entities=["caroline"]),
+]
+
+
+def write_cache(path, dataset_sha256, *, session_2_failed=True):
+    records = [extraction_record(dataset_sha256, 1, SESSION_1, entities=["caroline", "melanie"])]
+    if session_2_failed:
+        records.append(extraction_record(dataset_sha256, 2, [], status="failed"))
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def cached(tmp_path, sample):
+    write_cache(tmp_path / "extractions.jsonl", "d" * 64)
+    return cached_run(ExtractionCache(tmp_path / "extractions.jsonl"), "d" * 64, [(sample.sample_id, sample.turns)], EXTRACTOR, load_prompt(EXTRACT_VERSION))
+
+
+def test_cached_run_reads_records_and_totals(tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    run = cached(tmp_path, sample)
+
+    assert [m["content"] for m in run.memories("conv-1")] == [m["content"] for m in SESSION_1]
+    assert run.entity_ids("conv-1") == {"caroline", "melanie"}
+    totals = run.config["totals"]
+    assert totals["sessions"] == 2
+    assert totals["extracted_sessions"] == 1
+    assert totals["failed_sessions"] == {"conv-1": [2]}
+    assert totals["unextracted_sessions"] == {}
+    assert (totals["memories"], totals["input_tokens"], totals["output_tokens"]) == (3, 1000, 100)
+    assert totals["dropped"]["source_dia_ids"] == 1
+    assert run.config["extractor_model"] == EXTRACTOR
+    assert run.config["model_digests"] == ["sha256:fake"]
+    assert run.config["prompt"]["version"] == EXTRACT_VERSION
+
+
+def test_cached_run_counts_sessions_never_extracted(tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    write_cache(tmp_path / "x.jsonl", "d" * 64, session_2_failed=False)
+    run = cached_run(ExtractionCache(tmp_path / "x.jsonl"), "d" * 64, [("conv-1", sample.turns)], EXTRACTOR, load_prompt(EXTRACT_VERSION))
+    assert run.config["totals"]["failed_sessions"] == {}
+    assert run.config["totals"]["unextracted_sessions"] == {"conv-1": [2]}
+
+
+def test_cached_run_needs_an_extraction_per_sample(tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    write_cache(tmp_path / "x.jsonl", "d" * 64)
+    with pytest.raises(ValueError, match="no cached extraction of conv-1"):
+        cached_run(ExtractionCache(tmp_path / "x.jsonl"), "e" * 64, [("conv-1", sample.turns)], EXTRACTOR, load_prompt(EXTRACT_VERSION))
+    with pytest.raises(ValueError, match="no cached extraction"):
+        cached_run(ExtractionCache(tmp_path / "x.jsonl"), "d" * 64, [("conv-1", sample.turns)], "ollama:other", load_prompt(EXTRACT_VERSION))
+
+
+def test_extracted_ingestion_writes_memories_and_maps_keys_to_sources(client, tmp_path):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"] = [
+        {"question": "Did Caroline greet Melanie?", "answer": "yes", "evidence": ["D1:1", "D1:2"], "category": 1},
+        {"question": "Is Caroline back again?", "answer": "yes", "evidence": ["D2:1", "D1:1"], "category": 4},
+    ]
+    sample = parse_sample(raw)
+    extracted = cached(tmp_path, sample)
+    results, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted"), [sample], "x1", extracted=extracted))
+
+    first = client.remember_calls[0]
+    assert first["content"] == SESSION_1[0]["content"]
+    assert first["memory_type"] == "event"
+    assert first["tome"] == "temp-locomo-x1-conv-1"
+    assert first["occurred_at"] == "2023-05-08T00:00:00+00:00"
+    assert first["entities"] == ["caroline", "melanie"]
+    assert first["relationships"] == SESSION_1[0]["relationships"]
+    assert len(client.remember_calls) == 3
+    assert client.destroyed == ["temp-locomo-x1-conv-1"]
+    assert sorted(key_maps["conv-1"].values()) == [(), ("D1:1", "D1:2"), ("D1:2",)]
+
+    greeted, back = results
+    # Retrieved memories are expanded to their sources in rank order.
+    assert greeted.retrieved_sources == (("D1:1", "D1:2"), ("D1:2",), ())
+    assert greeted.retrieved == ("D1:1", "D1:2")
+    assert greeted.contexts[0] == Context("D1:1", SESSION_1[0]["content"])
+    assert greeted.contexts[2] == Context("", "Caroline is friendly.")
+    # D2:1 is still evidence, though no memory cites it.
+    assert back.evidence == ("D2:1", "D1:1")
+    assert back.covered == ("D1:1",)
+    assert greeted.covered == ("D1:1", "D1:2")
+
+    summary = summarize(results, [1])
+    assert summary["single-hop"]["coverage"] == 0.5
+    assert summary["multi-hop"]["recall@1"] == 1.0
+
+
+def test_extracted_ingestion_can_leave_occurred_at_unset(client, tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    asyncio.run(cli.run(client, args(ingest="extracted", no_occurred_at=True), [sample], "x2", extracted=cached(tmp_path, sample)))
+    assert all(c["occurred_at"] is None for c in client.remember_calls)
+
+
+def test_turns_ingestion_covers_all_evidence(client):
+    results, _, _ = asyncio.run(cli.run(client, args(), [parse_sample(RAW_SAMPLE)], "t1"))
+    assert all(r.covered == r.evidence for r in results)
+
+
+def test_key_maps_round_trip_and_load_single_id_maps():
+    maps = {"conv-1": {"mem_1.md": ("D1:1", "D1:2"), "mem_2.md": ()}}
+    assert cli.load_key_maps(json.loads(json.dumps(cli.dump_key_maps(maps)))) == maps
+    # Written by a turns run before extracted ingestion existed.
+    assert cli.load_key_maps({"conv-1": {"mem_1.md": "D1:1"}}) == {"conv-1": {"mem_1.md": ("D1:1",)}}
+
+
+def test_memory_stats():
+    maps = {"a": {"k1": ("D1:1", "D1:2"), "k2": ()}, "b": {"k3": ("D1:1",)}}
+    stats = cli.memory_stats(maps)
+    assert stats["a"] == {"memories": 2, "sources_per_memory": 1.0, "entities": 0}
+    assert stats["overall"] == {"memories": 3, "sources_per_memory": 1.0, "entities_per_conversation": 0.0}
+
+
+def test_main_ingests_extracted_and_compares_with_a_turns_run(tmp_path, monkeypatch, capsys):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"] = [{"question": "Did Caroline greet Melanie?", "answer": "yes", "evidence": ["D1:1", "D2:1"], "category": 1}]
+    data = tmp_path / "locomo.json"
+    data.write_text(json.dumps([raw]), encoding="utf-8")
+    write_cache(tmp_path / "extractions.jsonl", hashlib.sha256(data.read_bytes()).hexdigest())
+    monkeypatch.setattr(cli, "ConnectomeClient", FakeClient)
+    common = ["--data", str(data), "--results-dir", str(tmp_path), "--ks", "1,5", "--budgets", "8,64"]
+
+    cli.main([*common, "--run-id", "base"])
+    capsys.readouterr()
+    cli.main([*common, "--run-id", "ext", "--ingest", "extracted", "--extraction-cache", str(tmp_path / "extractions.jsonl"), "--extractor-model", EXTRACTOR, "--compare", "base"])
+    out = capsys.readouterr().out
+
+    result = json.loads((tmp_path / "ext.json").read_text(encoding="utf-8"))
+    ingestion = result["config"]["ingestion"]
+    assert ingestion["mode"] == "extracted"
+    assert ingestion["extraction"]["extractor_model"] == EXTRACTOR
+    assert ingestion["extraction"]["totals"]["failed_sessions"] == {"conv-1": [2]}
+    assert result["config"]["budgets"] == [8, 64]
+    assert result["summary"]["overall"]["coverage"] == 0.5
+    assert set(result["summary"]["overall"]) >= {"recall@1", "hit@5", "recall@8t", "underfilled@64t"}
+    assert result["memories"]["overall"]["memories"] == 3
+    assert result["memories"]["overall"]["entities_per_conversation"] == 2.0
+    assert json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))["config"]["ingestion"] == {"mode": "turns", "extraction": None}
+
+    assert "  ext (extracted)" in out and "  base (turns)" in out
+    assert "coverage" in out and "recall@8t" in out
+    assert "3 memories" in out and "3 memories, 1.00 sources/memory, 0.0 entities" in out
+
+
+def test_main_exits_without_a_cached_extraction(tmp_path, monkeypatch):
+    data = tmp_path / "locomo.json"
+    data.write_text(json.dumps([RAW_SAMPLE]), encoding="utf-8")
+    monkeypatch.setattr(cli, "ConnectomeClient", FakeClient)
+    with pytest.raises(SystemExit, match="no extraction cache"):
+        cli.main(["--data", str(data), "--results-dir", str(tmp_path), "--ingest", "extracted", "--extraction-cache", str(tmp_path / "none.jsonl")])
+    (tmp_path / "other.jsonl").write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit, match="run `locomo-eval extract`"):
+        cli.main(["--data", str(data), "--results-dir", str(tmp_path), "--ingest", "extracted", "--extraction-cache", str(tmp_path / "other.jsonl")])
