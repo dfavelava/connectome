@@ -1,0 +1,165 @@
+{
+  "config": {
+    "run_id": "base",
+    "started_at": "2026-09-28T01:16:30.884127+00:00",
+    "git_commit": "8d5a61b3c34663c3e947236946571c92833d9356",
+    "base_url": "http://fake/api/connectome",
+    "dataset": {
+      "path": "demo/l.json",
+      "sha256": "c460275b91b3cfdd9bb2f8f68289ded49a645155663aef233872860a3018b3d6"
+    },
+    "samples": [
+      "conv-1"
+    ],
+    "ks": [
+      1,
+      5,
+      10
+    ],
+    "budgets": [
+      64,
+      128,
+      256
+    ],
+    "token_counter": "words and punctuation marks (metrics.count_tokens)",
+    "recall_k": 10,
+    "answer_k": 10,
+    "search": {
+      "vector_weight": 0.6,
+      "text_weight": 0.4,
+      "rrf_k": 60,
+      "text_query": "plain",
+      "bm25_k1": 1.2,
+      "bm25_b": 0.75,
+      "text_max_df": 0.05
+    },
+    "reused_tomes": null,
+    "embedding_model": "nomic-embed-text",
+    "ingestion": {
+      "mode": "turns",
+      "extraction": null
+    },
+    "chunking": {
+      "unit": "one memory per dialog turn",
+      "template": "[{session_date}] {speaker}: {text}",
+      "occurred_at": "session date"
+    },
+    "concurrency": 8
+  },
+  "summary": {
+    "multi-hop": {
+      "n": 1,
+      "coverage": 1.0,
+      "recall@1": 0.0,
+      "hit@1": 0.0,
+      "recall@5": 0.0,
+      "hit@5": 0.0,
+      "recall@10": 0.0,
+      "hit@10": 0.0,
+      "recall@64t": 0.0,
+      "underfilled@64t": 1.0,
+      "recall@128t": 0.0,
+      "underfilled@128t": 1.0,
+      "recall@256t": 0.0,
+      "underfilled@256t": 1.0
+    },
+    "single-hop": {
+      "n": 1,
+      "coverage": 1.0,
+      "recall@1": 1.0,
+      "hit@1": 1.0,
+      "recall@5": 1.0,
+      "hit@5": 1.0,
+      "recall@10": 1.0,
+      "hit@10": 1.0,
+      "recall@64t": 1.0,
+      "underfilled@64t": 1.0,
+      "recall@128t": 1.0,
+      "underfilled@128t": 1.0,
+      "recall@256t": 1.0,
+      "underfilled@256t": 1.0
+    },
+    "overall": {
+      "n": 2,
+      "coverage": 1.0,
+      "recall@1": 0.5,
+      "hit@1": 0.5,
+      "recall@5": 0.5,
+      "hit@5": 0.5,
+      "recall@10": 0.5,
+      "hit@10": 0.5,
+      "recall@64t": 0.5,
+      "underfilled@64t": 1.0,
+      "recall@128t": 0.5,
+      "underfilled@128t": 1.0,
+      "recall@256t": 0.5,
+      "underfilled@256t": 1.0
+    }
+  },
+  "memories": {
+    "conv-1": {
+      "memories": 3,
+      "sources_per_memory": 1.0,
+      "entities": 0
+    },
+    "overall": {
+      "memories": 3,
+      "sources_per_memory": 1.0,
+      "entities_per_conversation": 0.0
+    }
+  },
+  "skipped": {
+    "no_evidence": 0,
+    "unknown_evidence_only": 0,
+    "unknown_evidence_ids": 0
+  },
+  "questions": [
+    {
+      "sample_id": "conv-1",
+      "question": "Did Caroline greet Melanie?",
+      "category": "multi-hop",
+      "evidence": [
+        "D1:1",
+        "D2:1"
+      ],
+      "retrieved": [],
+      "question_id": "conv-1#0",
+      "answer": "yes",
+      "adversarial_answer": null,
+      "contexts": [],
+      "retrieved_sources": [],
+      "covered": [
+        "D1:1",
+        "D2:1"
+      ]
+    },
+    {
+      "sample_id": "conv-1",
+      "question": "Is Caroline back again?",
+      "category": "single-hop",
+      "evidence": [
+        "D2:1"
+      ],
+      "retrieved": [
+        "D2:1"
+      ],
+      "question_id": "conv-1#1",
+      "answer": "yes",
+      "adversarial_answer": null,
+      "contexts": [
+        {
+          "dia_id": "D2:1",
+          "text": "[not a date] Caroline: Back again."
+        }
+      ],
+      "retrieved_sources": [
+        [
+          "D2:1"
+        ]
+      ],
+      "covered": [
+        "D2:1"
+      ]
+    }
+  ]
+}

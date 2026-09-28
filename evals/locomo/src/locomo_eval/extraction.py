@@ -405,11 +405,13 @@ def record_key(record: dict) -> tuple:
 
 class ExtractionCache:
     """Extracted sessions, appended one JSON line at a time. Only successful
-    records are hits; failed ones are kept in the file as a log."""
+    records are hits; failed ones are kept in the file as a log, and the
+    latest failure of a session never extracted successfully is in `failed`."""
 
     def __init__(self, path: Path):
         self.path = path
         self.records: dict[tuple, dict] = {}
+        self.failed: dict[tuple, dict] = {}
         if path.exists():
             with path.open(encoding="utf-8") as f:
                 for line in f:
@@ -418,8 +420,7 @@ class ExtractionCache:
                     except json.JSONDecodeError:
                         # A line cut short by a kill mid-write.
                         continue
-                    if record.get("status") == OK:
-                        self.records[record_key(record)] = record
+                    self._add(record)
 
     def get(self, key: tuple) -> dict | None:
         return self.records.get(key)
@@ -430,8 +431,15 @@ class ExtractionCache:
             f.write(json.dumps(record) + "\n")
             f.flush()
             os.fsync(f.fileno())
-        if record["status"] == OK:
-            self.records[record_key(record)] = record
+        self._add(record)
+
+    def _add(self, record: dict) -> None:
+        key = record_key(record)
+        if record.get("status") == OK:
+            self.records[key] = record
+            self.failed.pop(key, None)
+        elif key not in self.records:
+            self.failed[key] = record
 
 
 def session_record(dataset_sha256: str, session: Session, extractor: Extractor, known_entities: Sequence[Entity], result: SessionExtraction, model_digest: str | None) -> dict:
@@ -554,14 +562,89 @@ def pending_sessions(cache: ExtractionCache, extractor: Extractor, dataset_sha25
 
 def load_extractions(cache_path: Path, dataset_sha256: str, sample_id: str, extractor_model: str, prompt: Prompt, options: SamplingOptions = EXTRACT_OPTIONS) -> list[dict]:
     """A sample's cached session records for one extractor config, in session order."""
-    cache = ExtractionCache(cache_path)
-    records = [
-        r
-        for r in cache.records.values()
-        if (r["dataset_sha256"], r["sample_id"], r["extractor_model"], r["prompt_version"], r["prompt_sha256"], r["options_hash"])
-        == (dataset_sha256, sample_id, extractor_model, prompt.version, prompt.sha256, options_hash(options))
-    ]
-    return sorted(records, key=lambda r: r["session"])
+    return _sample_records(ExtractionCache(cache_path).records.values(), dataset_sha256, sample_id, extractor_model, prompt, options)
+
+
+def _sample_records(records: Iterable[dict], dataset_sha256: str, sample_id: str, extractor_model: str, prompt: Prompt, options: SamplingOptions) -> list[dict]:
+    wanted = (dataset_sha256, sample_id, extractor_model, prompt.version, prompt.sha256, options_hash(options))
+    matching = [r for r in records if (r["dataset_sha256"], r["sample_id"], r["extractor_model"], r["prompt_version"], r["prompt_sha256"], r["options_hash"]) == wanted]
+    return sorted(matching, key=lambda r: r["session"])
+
+
+@dataclass(frozen=True)
+class CachedRun:
+    """One extractor config's cached extraction of some samples, as the
+    retrieval run ingests it. No LLM calls are involved."""
+
+    # Each sample's successful session records, in session order.
+    records: dict[str, list[dict]]
+    # What the run config records: the extractor config and totals.
+    config: dict
+
+    def memories(self, sample_id: str) -> list[dict]:
+        return [m for record in self.records[sample_id] for m in record["memories"]]
+
+    def entity_ids(self, sample_id: str) -> set[str]:
+        return {e["id"] for record in self.records[sample_id] for e in record["entities"]}
+
+
+def cached_run(
+    cache: ExtractionCache,
+    dataset_sha256: str,
+    conversations: Iterable[tuple[str, Sequence[Turn]]],
+    extractor_model: str,
+    prompt: Prompt,
+    options: SamplingOptions = EXTRACT_OPTIONS,
+) -> CachedRun:
+    """The cached records for each conversation, and the totals over them.
+
+    A session with no successful record is left out and counted: as failed
+    when its last attempt failed validation, else as not extracted. A
+    conversation with no records at all raises ValueError - run the extract
+    stage first."""
+    records: dict[str, list[dict]] = {}
+    failed: dict[str, list[int]] = {}
+    unextracted: dict[str, list[int]] = {}
+    sessions = 0
+    for sample_id, turns in conversations:
+        found = _sample_records(cache.records.values(), dataset_sha256, sample_id, extractor_model, prompt, options)
+        if not found:
+            raise ValueError(f"no cached extraction of {sample_id} by {extractor_model} ({prompt.version}) in {cache.path}")
+        records[sample_id] = found
+        extracted = {r["session"] for r in found}
+        failed_here = {r["session"] for r in _sample_records(cache.failed.values(), dataset_sha256, sample_id, extractor_model, prompt, options)}
+        for session in sessions_of(sample_id, turns):
+            sessions += 1
+            if session.number in extracted:
+                continue
+            (failed if session.number in failed_here else unextracted).setdefault(sample_id, []).append(session.number)
+
+    every = [r for found in records.values() for r in found]
+    dropped = dict.fromkeys(DROP_REASONS, 0)
+    for record in every:
+        for reason, count in record["dropped"].items():
+            dropped[reason] = dropped.get(reason, 0) + count
+    config = {
+        "cache": str(cache.path),
+        "extractor_model": extractor_model,
+        "model_digests": sorted({r["model_digest"] for r in every if r.get("model_digest")}),
+        "prompt": prompt.config(),
+        "options": asdict(options),
+        "options_hash": options_hash(options),
+        "totals": {
+            "sessions": sessions,
+            "extracted_sessions": len(every),
+            "failed_sessions": failed,
+            "unextracted_sessions": unextracted,
+            "memories": sum(len(r["memories"]) for r in every),
+            "attempts": sum(r["attempts"] for r in every),
+            "input_tokens": sum(r["input_tokens"] for r in every),
+            "output_tokens": sum(r["output_tokens"] for r in every),
+            "seconds": round(sum(r["seconds"] for r in every), 3),
+            "dropped": dropped,
+        },
+    }
+    return CachedRun(records=records, config=config)
 
 
 def print_tallies(tallies: list[SampleTally]) -> None:

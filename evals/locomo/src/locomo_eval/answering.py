@@ -404,7 +404,15 @@ def retrieval_summary(run: dict, question_ids: set[str], ks: list[int]) -> dict[
     """Retrieval metrics over the scored questions, with an
     overall_excl_adversarial row to match the answer summary."""
     results = [
-        QuestionResult(q["sample_id"], q["question"], q["category"], tuple(q["evidence"]), tuple(q["retrieved"]))
+        QuestionResult(
+            q["sample_id"],
+            q["question"],
+            q["category"],
+            tuple(q["evidence"]),
+            tuple(q["retrieved"]),
+            # k counts memories, and an extracted memory can cite several turns.
+            retrieved_sources=tuple(tuple(s) for s in q.get("retrieved_sources") or ()),
+        )
         for q in run["questions"]
         if q["question_id"] in question_ids
     ]

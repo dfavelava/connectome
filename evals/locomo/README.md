@@ -24,6 +24,8 @@ open-domain, adversarial):
 
 - **recall@k** - mean fraction of a question's evidence turns in the top k.
 - **hit@k** - fraction of questions with at least one evidence turn in the top k.
+- **recall@Bt** - recall at an equal budget of B tokens of memory text, and
+  **coverage** - see [Scoring extracted memories](#scoring-extracted-memories---ingest-extracted).
 
 Questions with no usable evidence (a handful in `locomo10.json`) are skipped
 and counted under `skipped` in the output. A few evidence strings in the
@@ -68,13 +70,16 @@ Useful flags (`uv run locomo-eval --help` for all):
 
 - `--samples conv-26,conv-30` - run a subset of conversations.
 - `--ks 1,5,10,20` - k values to report (max 50, the backend's search cap).
+- `--budgets 64,128,256` - token budgets for equal-budget recall (`0` for none).
+- `--ingest extracted` - ingest a cached extraction instead of the turns (see
+  [below](#scoring-extracted-memories---ingest-extracted)).
 - `--answer-k N` - retrieved turns a later answering stage will use (default
   10). Recall fetches at least this many, and `contexts` holds them all.
 - `--run-id NAME` - fixed tome/result name instead of a timestamp.
 - `--no-occurred-at` - leave `occurred_at` unset; the date stays in the text.
 - `--concurrency N` - in-flight requests during ingestion and querying.
 - `--keep-tomes` - leave the tomes in place and write
-  `results/<run-id>.keys.json` (the memory key -> dialog id map).
+  `results/<run-id>.keys.json` (the memory key -> source dialog ids map).
 - `--reuse-tomes RUN_ID` - skip ingestion and query the tomes a `--keep-tomes`
   run left behind (see below).
 
@@ -327,3 +332,61 @@ extracted with.
 `--concurrency N` extracts N conversations at once; sessions within a
 conversation always run in order, since each depends on the entities before it.
 A new prompt version is a new cache key, so its results sit beside the old ones.
+
+### Scoring extracted memories (`--ingest extracted`)
+
+Once a conversation's extraction is cached, the retrieval run can ingest those
+memories instead of the raw turns and score them the same way:
+
+```bash
+uv run locomo-eval --run-id turns                       # the raw-turn baseline
+uv run locomo-eval --run-id extracted --ingest extracted \
+  --extractor-model ollama:qwen3:8b --compare turns
+```
+
+`--ingest extracted` reads the extraction cache (`--extraction-cache`,
+`--extractor-model`, `--extract-prompt` pick the config, as in the extract
+stage) and makes no LLM calls. Each memory is written with `remember` as it
+was extracted: content, memory type, entities, relationships, `occurred_at`
+(unless `--no-occurred-at`) and the run's tome. Sessions whose extraction
+failed or never ran are left out with a warning; a conversation with no cached
+extraction at all stops the run. The default stays `--ingest turns`, so
+earlier results remain comparable.
+
+Every recall hit maps back to its memory's `source_dia_ids`, so the key map is
+memory key -> source dialog ids (one id per key for turns). `--keep-tomes` and
+`--reuse-tomes` work in both modes; `--reuse-tomes` refuses a run that was
+ingested in the other mode.
+
+Metrics, per category (see [`metrics.py`](src/locomo_eval/metrics.py)):
+
+- **coverage** - the fraction of a question's evidence turns cited by *any*
+  memory in the conversation, retrieved or not. It's the most retrieval could
+  find, so it splits what extraction lost from what retrieval lost. It is 1.0
+  for turns.
+- **recall@k / hit@k** - k counts memories; the top k are expanded to their
+  source turns in rank order, duplicates removed. For turns this is the same
+  number as before.
+- **recall@Bt** - recall over the top-ranked memories whose text fits in B
+  tokens (`--budgets`, default `64,128,256`; a memory that would overflow
+  ends the list). A memory citing many turns inflates recall@k, so this is
+  the fair comparison between modes. Tokens are approximated as words plus
+  punctuation marks, alike for both modes. `underfilled@Bt` is the fraction
+  of questions whose whole retrieved list fit in fewer than B tokens - raise
+  `--ks` or `--answer-k` to fetch more before trusting that budget.
+
+The results also hold `memories` (per sample and overall: memory count,
+sources per memory, entities per conversation), and the config records
+`ingestion.mode` and, for extracted runs, `ingestion.extraction`: the cache,
+extractor model and digests, prompt version and sha256, sampling options,
+and totals from the cache (sessions extracted, failed and never extracted,
+memories, attempts, tokens, seconds, and dropped ids by reason).
+
+`--compare RUN_ID` prints another finished run's metrics, recomputed with this
+run's `--ks` and `--budgets`, under each category's row. A run from before
+coverage was recorded prints `-` there.
+
+Recall ranks on memory content only today: entities and relationships are
+stored but don't affect ranking, so this measures extracted text against raw
+turns, not the graph. Storing them now lets graph-expanded recall be measured
+later on the same cached extraction.
