@@ -52,6 +52,11 @@ DEFAULT_ANSWER_K = 10
 DEFAULT_BUDGETS = [64, 128, 256]
 TURNS = "turns"
 EXTRACTED = "extracted"
+# What becomes of a memory the lifecycle extractor superseded: its
+# relationships are marked superseded_by its successor (recall still returns
+# it), or it is forgotten.
+MARK = "mark"
+FORGET = "forget"
 # The backend caps search k at 50 - see maxSearchK in backend/resources/searchResource.go.
 MAX_SEARCH_K = 50
 MEMORY_TEMPLATE = "[{session_date}] {speaker}: {text}"
@@ -99,10 +104,21 @@ async def ingest(client: ConnectomeClient, sample: Sample, tome: str, concurrenc
     return dict(await asyncio.gather(*(write(turn) for turn in sample.turns)))
 
 
-async def ingest_extracted(client: ConnectomeClient, memories: Sequence[dict], tome: str, concurrency: int, use_occurred_at: bool) -> KeyMap:
+async def ingest_extracted(
+    client: ConnectomeClient,
+    memories: Sequence[dict],
+    tome: str,
+    concurrency: int,
+    use_occurred_at: bool,
+    superseded: str = MARK,
+) -> KeyMap:
     """Write each extracted memory as it was extracted - content, type,
     entities, relationships and occurred_at - and return the key map to its
-    source_dia_ids. No LLM is involved."""
+    source_dia_ids. No LLM is involved.
+
+    Memories the lifecycle variant superseded are then marked (each of their
+    relationships gets superseded_by the successor's key) or, with FORGET,
+    forgotten and left out of the key map."""
     semaphore = asyncio.Semaphore(concurrency)
 
     async def write(memory: dict) -> tuple[str, tuple[str, ...]]:
@@ -117,7 +133,31 @@ async def ingest_extracted(client: ConnectomeClient, memories: Sequence[dict], t
             )
         return result["key"], tuple(memory["source_dia_ids"])
 
-    return dict(await asyncio.gather(*(write(memory) for memory in memories)))
+    written = await asyncio.gather(*(write(memory) for memory in memories))
+    key_map = dict(written)
+    by_id = {memory["id"]: (memory, key) for memory, (key, _) in zip(memories, written, strict=True) if memory.get("id")}
+
+    async def supersede(old: dict, old_key: str, new_key: str) -> None:
+        async with semaphore:
+            if superseded == FORGET:
+                _ = await client.forget(old_key, tome=tome)
+                return
+            for rel in old["relationships"]:
+                _ = await client.supersede_relationship(
+                    old_key, rel["subjectEntityId"], rel["predicate"], rel.get("objectEntityId"), superseded_by=new_key, tome=tome
+                )
+
+    pending = {}
+    for memory, (new_key, _) in zip(memories, written, strict=True):
+        for old_id in memory.get("supersedes") or ():
+            # An id no memory has can only come from a session re-extracted after its successor.
+            if old_id in by_id and old_id not in pending:
+                old, old_key = by_id[old_id]
+                pending[old_id] = supersede(old, old_key, new_key)
+                if superseded == FORGET:
+                    key_map.pop(old_key)
+    await asyncio.gather(*pending.values())
+    return key_map
 
 
 async def query(client: ConnectomeClient, sample: Sample, tome: str, key_map: KeyMap, k: int, concurrency: int) -> tuple[list[QuestionResult], dict[str, int]]:
@@ -210,7 +250,7 @@ async def run(
                 key_map = key_maps[sample.sample_id]
             elif extracted is not None:
                 memories = extracted.memories(sample.sample_id)
-                key_map = key_maps[sample.sample_id] = await ingest_extracted(client, memories, tome, args.concurrency, not args.no_occurred_at)
+                key_map = key_maps[sample.sample_id] = await ingest_extracted(client, memories, tome, args.concurrency, not args.no_occurred_at, args.superseded)
             else:
                 key_map = key_maps[sample.sample_id] = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
             ingested = time.monotonic()
@@ -274,6 +314,7 @@ def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list
             "unit": "one memory per extracted memory",
             "template": None,
             "occurred_at": "extracted" if not args.no_occurred_at else None,
+            "superseded": args.superseded if extracted.config.get("variant") == extraction.LIFECYCLE else None,
         }
     return {
         "run_id": run_id,
@@ -325,6 +366,10 @@ def print_summary(
         cells = ["-" if row.get(c) is None else f"{row[c]}" if c == "n" else f"{row[c]:.3f}" for c in columns]
         print(f"{name:<{width}}" + "".join(f"{c:>12}" for c in cells))
 
+    def delta(row: dict[str, float | int], base: dict[str, float | int]) -> None:
+        cells = ["-" if c == "n" or row.get(c) is None or base.get(c) is None else f"{row[c] - base[c]:+.3f}" for c in columns]
+        print(f"{'  diff':<{width}}" + "".join(f"{c:>12}" for c in cells))
+
     for name, row in summary.items():
         if baseline is None:
             line(name, row)
@@ -332,6 +377,7 @@ def print_summary(
         print(name)
         line(f"  {label}", row)
         line(f"  {baseline_label}", baseline.get(name, {}))
+        delta(row, baseline.get(name, {}))
     if budgets:
         overall = summary.get("overall", {})
         print("underfilled (retrieval ran out before the budget): " + ", ".join(f"{b}t {overall.get(f'underfilled@{b}t', 0):.3f}" for b in budgets))
@@ -366,6 +412,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--extraction-cache", type=Path, default=DEFAULT_CACHE_PATH, help="--ingest extracted: the extract stage's cache (default: %(default)s)")
     parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="--ingest extracted: whose extraction to ingest (default: %(default)s)")
     parser.add_argument("--extract-prompt", default=EXTRACT_VERSION, help="--ingest extracted: the extraction prompt version (default: %(default)s)")
+    parser.add_argument(
+        "--superseded",
+        choices=[MARK, FORGET],
+        default=MARK,
+        help="--ingest extracted with a lifecycle extraction: mark superseded memories' relationships superseded_by their successor, or forget them (default: %(default)s)",
+    )
     parser.add_argument("--compare", metavar="RUN_ID", help="print a finished run's metrics (e.g. a turns run) under this run's, row by row")
     parser.add_argument(
         "--answer-k",
@@ -406,6 +458,8 @@ def load_cached_run(args: argparse.Namespace, samples: list[Sample]) -> CachedRu
     except ValueError as exc:
         sys.exit(f"{exc}; run `locomo-eval extract` with the same --samples, --extractor-model and --extract-prompt first")
     totals = extracted.config["totals"]
+    if extracted.config["variant"] == extraction.LIFECYCLE:
+        print(f"lifecycle extraction: {totals['duplicates']} duplicates not written, {totals['superseded']} memories superseded ({args.superseded})", file=sys.stderr)
     if totals["failed_sessions"] or totals["unextracted_sessions"]:
         print(
             f"warning: sessions with no successful extraction are left out - failed: {totals['failed_sessions'] or 'none'}, "
@@ -484,15 +538,28 @@ def main(argv: list[str] | None = None) -> None:
             indent=2,
         )
 
-    label = f"{run_id} ({args.ingest})"
+    label = f"{run_id} ({ingestion_label(config)})"
     if baseline is None:
         print_summary(summary, args.ks, args.budgets)
         print_memory_stats(stats, label)
     else:
-        baseline_label = f"{args.compare} ({(baseline['config'].get('ingestion') or {}).get('mode', TURNS)})"
+        baseline_label = f"{args.compare} ({ingestion_label(baseline['config'])})"
         print_summary(summary, args.ks, args.budgets, label, rescore(baseline, args.ks, args.budgets), baseline_label)
         print_memory_stats(stats, label, baseline.get("memories"), baseline_label)
     print(f"\nskipped: {skipped}\nwrote {out_path}")
+
+
+def ingestion_label(config: dict) -> str:
+    """What a run ingested: turns, or extracted by the add-only or lifecycle
+    variant (and, for lifecycle, what became of superseded memories)."""
+    ingestion = config.get("ingestion") or {}
+    mode = ingestion.get("mode", TURNS)
+    if mode != EXTRACTED:
+        return mode
+    variant = (ingestion.get("extraction") or {}).get("variant") or extraction.ADD_ONLY
+    if variant == extraction.LIFECYCLE:
+        variant = f"{variant}, {(config.get('chunking') or {}).get('superseded') or MARK}"
+    return f"{mode}: {variant}"
 
 
 def rescore(run: dict, ks: list[int], budgets: Sequence[int]) -> dict[str, dict[str, float | int]]:

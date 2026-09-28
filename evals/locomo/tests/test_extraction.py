@@ -16,7 +16,10 @@ from locomo_eval.extraction import (
     EXTRACT_VERSION,
     EXTRACTION_SCHEMA,
     FAILED,
+    LIFECYCLE_SCHEMA,
+    LIFECYCLE_VERSION,
     OK,
+    Duplicate,
     Entity,
     ExtractionCache,
     ExtractionParseError,
@@ -27,6 +30,7 @@ from locomo_eval.extraction import (
     normalize_entity_id,
     parse_extraction,
     pending_sessions,
+    recall_memories,
     sessions_of,
 )
 from locomo_eval.llm import RETRY_TEMPERATURE, Completion, SamplingOptions
@@ -190,7 +194,7 @@ def test_parse_extraction_drops_invalid_ids_and_counts_them():
     assert m.entities == ("caroline",)
     assert m.relationships == ({"subjectEntityId": "caroline", "predicate": "is_happy", "objectEntityId": None, "kind": "fact"},)
     assert m.occurred_at is None
-    assert result.dropped == {"source_dia_ids": 3, "entity_ids": 1, "entity_refs": 1, "relationships": 2, "occurred_at": 1}
+    assert result.dropped == {"source_dia_ids": 3, "entity_ids": 1, "entity_refs": 1, "relationships": 2, "occurred_at": 1, "memory_refs": 0}
 
 
 @pytest.mark.parametrize(
@@ -450,3 +454,143 @@ def test_extract_command_runs_and_resumes(tmp_path, monkeypatch, capsys):
 
     with pytest.raises(SystemExit, match="unknown sample ids: conv-9"):
         cli.main([*argv[:-4], "--samples", "conv-9"])
+
+
+# --- lifecycle variant ----------------------------------------------------------
+
+
+def lifecycle_reply(memories=None, entities=None, duplicates=None) -> str:
+    return json.dumps({"entities": entities or [], "memories": [{"supersedes": [], **m} for m in memories or []], "duplicates": duplicates or []})
+
+
+def stored(id_, content, occurred_at=None):
+    return {"id": id_, "content": content, "occurred_at": occurred_at}
+
+
+def test_lifecycle_prompt_is_committed_and_generic():
+    prompt = load_prompt(LIFECYCLE_VERSION)
+    assert extraction.is_lifecycle(prompt) and not extraction.is_lifecycle(load_prompt(EXTRACT_VERSION))
+    lowered = prompt.text.lower()
+    for name in CATEGORY_NAMES.values():
+        assert name not in lowered
+    assert "question" not in lowered
+
+
+def test_lifecycle_prompt_shows_recalled_memories_with_ids():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[1]
+    prompt = load_prompt(LIFECYCLE_VERSION)
+    text = extraction_prompt(prompt, session, [], [stored("M1.1", "Caroline plans to join a support group.", "2023-05-08T00:00:00+00:00"), stored("M1.2", "Melanie likes sunsets.")])
+    assert "M1.1 | 2023-05-08 | Caroline plans to join a support group." in text
+    assert "M1.2 | - | Melanie likes sunsets." in text
+    assert "$" not in text
+    assert "Stored memories that may relate to this session (id | date | content):\n(none yet)" in extraction_prompt(prompt, session, [])
+
+
+def test_parse_lifecycle_reply_supersedes_and_duplicates():
+    text = lifecycle_reply(
+        [
+            {**memory("Caroline joined the support group on 14 May 2023.", sources=["D2:1"]), "supersedes": ["m1.1", "M9.9"]},
+            {**memory("Caroline goes to the support group.", sources=["D2:1"]), "supersedes": ["M1.1"]},
+        ],
+        duplicates=[
+            {"memory_id": "M1.2", "source_dia_ids": ["D2:2", "D1:1"]},
+            {"memory_id": "M1.2", "source_dia_ids": ["D2:2"]},
+            {"memory_id": "M1.1", "source_dia_ids": ["D2:1"]},
+        ],
+    )
+    result = parse_extraction(text, {"D2:1", "D2:2"}, [], ["M1.1", "M1.2"])
+    first, second = result.memories
+    assert first.supersedes == ("M1.1",)
+    # Each stored memory is superseded once, and one that is superseded isn't also repeated.
+    assert second.supersedes == ()
+    assert result.duplicates == (Duplicate("M1.2", ("D2:2",)),)
+    assert result.dropped["memory_refs"] == 4
+    assert result.dropped["source_dia_ids"] == 1
+
+
+def test_parse_lifecycle_reply_needs_its_fields():
+    with pytest.raises(ExtractionParseError, match="duplicates"):
+        parse_extraction(reply([memory()]), {"D1:1"}, [], [])
+    with pytest.raises(ExtractionParseError, match="supersedes"):
+        parse_extraction(json.dumps({"entities": [], "memories": [memory()], "duplicates": []}), {"D1:1"}, [], [])
+    # The add-only variant ignores lifecycle fields it didn't ask for.
+    assert parse_extraction(lifecycle_reply([memory()]), {"D1:1"}).memories[0].supersedes == ()
+
+
+def test_recall_memories_ranks_per_turn_and_keeps_stored_order():
+    session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[1]
+    memories = [
+        stored("M1.1", "Melanie likes sunsets."),
+        stored("M1.2", "Caroline wants to find an LGBTQ support group."),
+        stored("M1.3", "Caroline went to a support group meeting in April 2023."),
+        stored("M1.4", "Melanie paints."),
+    ]
+    assert [m["id"] for m in recall_memories(memories, session)] == ["M1.2", "M1.3"]
+    assert [m["id"] for m in recall_memories(memories, session, per_turn=1)] == ["M1.2"]
+    assert [m["id"] for m in recall_memories(memories, session, limit=1)] == ["M1.2"]
+    assert recall_memories([], session) == []
+
+
+def test_lifecycle_extraction_recalls_supersedes_and_caches(tmp_path):
+    path = tmp_path / "cache.jsonl"
+    llm = FakeLLM(
+        [
+            lifecycle_reply(
+                [memory("Caroline says hey to Mel.", sources=["D1:1"]), memory("Melanie shared a photo of a sunset.", sources=["D1:2"])],
+            ),
+            lifecycle_reply(
+                [{**memory("Caroline is back and says hey to Mel again.", sources=["D2:1"]), "supersedes": ["M1.1"]}],
+                duplicates=[{"memory_id": "M1.2", "source_dia_ids": ["D2:2"]}],
+            ),
+        ]
+    )
+    ex = OllamaExtractor(llm, MODEL, load_prompt(LIFECYCLE_VERSION))
+    raw = copy.deepcopy(RAW)
+    raw["conversation"]["session_2"] = [
+        {"speaker": "Caroline", "dia_id": "D2:1", "text": "Hey Mel, I'm back."},
+        {"speaker": "Melanie", "dia_id": "D2:2", "text": "Another sunset photo!"},
+    ]
+    turns = parse_sample(raw).turns
+    tally = run(extract_sample(ex, ExtractionCache(path), DATASET_SHA, "conv-1", turns))
+    assert all(c["format"] == LIFECYCLE_SCHEMA for c in llm.calls)
+    assert "Stored memories that may relate to this session (id | date | content):\n(none yet)" in llm.calls[0]["user"]
+    assert "M1.1 | - | Caroline says hey to Mel." in llm.calls[1]["user"]
+    assert "M1.2 | - | Melanie shared a photo of a sunset." in llm.calls[1]["user"]
+    assert (tally.memories, tally.duplicates, tally.superseded) == (3, 1, 1)
+
+    first, second = (json.loads(line) for line in path.read_text().splitlines())
+    assert first["prompt_version"] == LIFECYCLE_VERSION
+    assert first["recalled_memory_ids"] == []
+    assert second["recalled_memory_ids"] == ["M1.1", "M1.2"]
+    assert second["memories"][0]["supersedes"] == ["M1.1"]
+    assert second["duplicates"] == [{"memory_id": "M1.2", "source_dia_ids": ["D2:2"]}]
+
+    # The add-only variant is cached apart; a rerun of this one is all hits with the same counts.
+    assert pending_sessions(ExtractionCache(path), extractor(FakeLLM()), DATASET_SHA, [("conv-1", turns)]) == 2
+    rerun = FakeLLM()
+    tally = run(extract_sample(OllamaExtractor(rerun, MODEL, load_prompt(LIFECYCLE_VERSION)), ExtractionCache(path), DATASET_SHA, "conv-1", turns))
+    assert rerun.calls == []
+    assert (tally.cached, tally.duplicates, tally.superseded) == (2, 1, 1)
+
+    loaded = extraction.cached_run(ExtractionCache(path), DATASET_SHA, [("conv-1", turns)], MODEL, load_prompt(LIFECYCLE_VERSION))
+    assert [m["id"] for m in loaded.memories("conv-1")] == ["M1.1", "M1.2", "M2.1"]
+    assert loaded.config["variant"] == extraction.LIFECYCLE
+    assert (loaded.config["totals"]["duplicates"], loaded.config["totals"]["superseded"]) == (1, 1)
+
+
+def test_superseded_memories_are_not_recalled_again(tmp_path):
+    raw = copy.deepcopy(RAW)
+    raw["conversation"]["session_3_date_time"] = "9:00 am on 1 June, 2023"
+    raw["conversation"]["session_3"] = [{"speaker": "Caroline", "dia_id": "D3:1", "text": "Hey Mel, the support group was great."}]
+    turns = parse_sample(raw).turns
+    llm = FakeLLM(
+        [
+            lifecycle_reply([memory("Caroline says hey to Mel.", sources=["D1:1"])]),
+            lifecycle_reply([{**memory("Caroline went to the LGBTQ support group.", sources=["D2:1"]), "supersedes": ["M1.1"]}]),
+            lifecycle_reply([]),
+        ]
+    )
+    run(extract_sample(OllamaExtractor(llm, MODEL, load_prompt(LIFECYCLE_VERSION)), ExtractionCache(tmp_path / "c.jsonl"), DATASET_SHA, "conv-1", turns))
+    assert "M1.1 |" in llm.calls[1]["user"]
+    assert "M1.1 |" not in llm.calls[2]["user"]
+    assert "M2.1 | - | Caroline went to the LGBTQ support group." in llm.calls[2]["user"]

@@ -11,6 +11,7 @@ from locomo_eval.dataset import parse_sample
 from locomo_eval.extraction import (
     EXTRACT_OPTIONS,
     EXTRACT_VERSION,
+    LIFECYCLE_VERSION,
     ExtractionCache,
     cached_run,
     options_hash,
@@ -31,6 +32,8 @@ class FakeClient:
         self.destroyed: list[str] = []
         self.remember_calls: list[dict] = []
         self.recall_calls: list[dict] = []
+        self.forgotten: list[str] = []
+        self.superseded: list[dict] = []
         self.fail_recall = False
 
     async def remember(self, content, memory_type, tome, occurred_at, entities=None, relationships=None):
@@ -53,6 +56,16 @@ class FakeClient:
             return {"results": [{"key": key, "content": f"---\ntype: event\n---\n{memories[key]}\n"} for key in hits]}
         return {"results": [{"key": key} for key in hits]}
 
+    async def forget(self, key, tome=None):
+        self.forgotten.append(key)
+        del self.tomes[tome][key]
+        return {"message": "deleted", "key": key}
+
+    async def supersede_relationship(self, key, subject_entity_id, predicate, object_entity_id=None, superseded_by=None, tome=None):
+        assert key in self.tomes[tome]
+        self.superseded.append({"key": key, "subject": subject_entity_id, "predicate": predicate, "object": object_entity_id, "superseded_by": superseded_by})
+        return {}
+
     async def destroy_tome(self, tome, confirm=False):
         self.destroyed.append(tome)
         self.tomes.pop(tome, None)
@@ -65,7 +78,7 @@ def client():
 
 
 def args(**overrides):
-    defaults = {"ks": [1, 5], "answer_k": 10, "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None, "ingest": "turns"}
+    defaults = {"ks": [1, 5], "answer_k": 10, "concurrency": 2, "no_occurred_at": False, "keep_tomes": False, "reuse_tomes": None, "ingest": "turns", "superseded": "mark"}
     return argparse.Namespace(**{**defaults, **overrides})
 
 
@@ -173,8 +186,8 @@ def test_memory_body_strips_frontmatter():
 EXTRACTOR = "ollama:fake-extractor"
 
 
-def extraction_record(dataset_sha256, session, memories, entities=(), status="ok"):
-    prompt = load_prompt(EXTRACT_VERSION)
+def extraction_record(dataset_sha256, session, memories, entities=(), status="ok", prompt_version=EXTRACT_VERSION, duplicates=()):
+    prompt = load_prompt(prompt_version)
     return {
         "dataset_sha256": dataset_sha256,
         "sample_id": "conv-1",
@@ -188,6 +201,7 @@ def extraction_record(dataset_sha256, session, memories, entities=(), status="ok
         "status": status,
         "entities": [{"id": e, "name": e.title(), "kind": "person"} for e in entities],
         "memories": memories if status == "ok" else [],
+        "duplicates": list(duplicates),
         "dropped": {"source_dia_ids": 1} if status == "ok" else {},
         "attempts": 1 if status == "ok" else 3,
         "error": None if status == "ok" else "bad reply",
@@ -359,7 +373,8 @@ def test_main_ingests_extracted_and_compares_with_a_turns_run(tmp_path, monkeypa
     assert result["memories"]["overall"]["entities_per_conversation"] == 2.0
     assert json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))["config"]["ingestion"] == {"mode": "turns", "extraction": None}
 
-    assert "  ext (extracted)" in out and "  base (turns)" in out
+    assert "  ext (extracted: add-only)" in out and "  base (turns)" in out
+    assert "  diff" in out and "-0.500" in out
     assert "coverage" in out and "recall@8t" in out
     assert "3 memories" in out and "3 memories, 1.00 sources/memory, 0.0 entities" in out
 
@@ -373,3 +388,75 @@ def test_main_exits_without_a_cached_extraction(tmp_path, monkeypatch):
     (tmp_path / "other.jsonl").write_text("", encoding="utf-8")
     with pytest.raises(SystemExit, match="run `locomo-eval extract`"):
         cli.main(["--data", str(data), "--results-dir", str(tmp_path), "--ingest", "extracted", "--extraction-cache", str(tmp_path / "other.jsonl")])
+
+
+def write_lifecycle_cache(path, dataset_sha256):
+    """Session 2 supersedes session 1's friendship memory and repeats its sunset one."""
+    session_2 = [{**extracted_memory("Caroline came back to see Melanie.", ["D2:1"], entities=["caroline"]), "supersedes": ["M1.1"]}]
+    records = [
+        extraction_record(dataset_sha256, 1, [{**m, "supersedes": []} for m in SESSION_1], entities=["caroline", "melanie"], prompt_version=LIFECYCLE_VERSION),
+        extraction_record(dataset_sha256, 2, session_2, prompt_version=LIFECYCLE_VERSION, duplicates=[{"memory_id": "M1.2", "source_dia_ids": ["D2:1"]}]),
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def lifecycle_cached(tmp_path, sample):
+    write_lifecycle_cache(tmp_path / "extractions.jsonl", "d" * 64)
+    return cached_run(ExtractionCache(tmp_path / "extractions.jsonl"), "d" * 64, [(sample.sample_id, sample.turns)], EXTRACTOR, load_prompt(LIFECYCLE_VERSION))
+
+
+def test_lifecycle_ingestion_marks_superseded_relationships(client, tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    extracted = lifecycle_cached(tmp_path, sample)
+    assert (extracted.config["totals"]["duplicates"], extracted.config["totals"]["superseded"]) == (1, 1)
+    _, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted", keep_tomes=True), [sample], "l1", extracted=extracted))
+    assert len(client.remember_calls) == 4
+    old_key, new_key = "mem_1.md", "mem_4.md"
+    assert client.superseded == [{"key": old_key, "subject": "caroline", "predicate": "friend_of", "object": "melanie", "superseded_by": new_key}]
+    assert client.forgotten == []
+    # A marked memory is still stored and can still be recalled.
+    assert old_key in key_maps["conv-1"] and old_key in client.tomes["temp-locomo-l1-conv-1"]
+
+
+def test_lifecycle_ingestion_can_forget_superseded_memories(client, tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    extracted = lifecycle_cached(tmp_path, sample)
+    _, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted", superseded="forget"), [sample], "l2", extracted=extracted))
+    assert client.forgotten == ["mem_1.md"]
+    assert client.superseded == []
+    assert sorted(key_maps["conv-1"].values()) == [(), ("D1:2",), ("D2:1",)]
+
+
+def test_add_only_ingestion_supersedes_nothing(client, tmp_path):
+    sample = parse_sample(RAW_SAMPLE)
+    asyncio.run(cli.run(client, args(ingest="extracted", superseded="forget"), [sample], "a1", extracted=cached(tmp_path, sample)))
+    assert client.forgotten == [] and client.superseded == []
+
+
+def test_main_compares_lifecycle_with_add_only(tmp_path, monkeypatch, capsys):
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"] = [{"question": "Did Caroline come back?", "answer": "yes", "evidence": ["D2:1"], "category": 2}]
+    data = tmp_path / "locomo.json"
+    data.write_text(json.dumps([raw]), encoding="utf-8")
+    sha = hashlib.sha256(data.read_bytes()).hexdigest()
+    write_cache(tmp_path / "add.jsonl", sha)
+    write_lifecycle_cache(tmp_path / "life.jsonl", sha)
+    monkeypatch.setattr(cli, "ConnectomeClient", FakeClient)
+    common = ["--data", str(data), "--results-dir", str(tmp_path), "--ks", "1", "--budgets", "0", "--ingest", "extracted", "--extractor-model", EXTRACTOR]
+
+    cli.main([*common, "--run-id", "add", "--extraction-cache", str(tmp_path / "add.jsonl")])
+    capsys.readouterr()
+    cli.main([*common, "--run-id", "life", "--extraction-cache", str(tmp_path / "life.jsonl"), "--extract-prompt", LIFECYCLE_VERSION, "--superseded", "forget", "--compare", "add"])
+    captured = capsys.readouterr()
+
+    config = json.loads((tmp_path / "life.json").read_text(encoding="utf-8"))["config"]
+    assert config["ingestion"]["extraction"]["variant"] == "lifecycle"
+    assert config["ingestion"]["extraction"]["recall"]["limit"] > 0
+    assert config["chunking"]["superseded"] == "forget"
+    assert "1 duplicates not written, 1 memories superseded (forget)" in captured.err
+    out = captured.out
+    assert "  life (extracted: lifecycle, forget)" in out and "  add (extracted: add-only)" in out
+    # Session 2 failed in the add-only run, so only the lifecycle run covers D2:1.
+    diff = next(line for line in out.splitlines()[out.splitlines().index("temporal") :] if line.startswith("  diff"))
+    # diff, n, coverage, recall@1
+    assert diff.split()[1:3] == ["-", "+1.000"]
