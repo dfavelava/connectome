@@ -42,15 +42,73 @@ type NearestNeighbor struct {
 	Distance   float64
 }
 
+// Ranking is every setting that shapes how Search orders results. Search
+// takes it per call, so the dao holds no per-request state and concurrent
+// searches can rank differently.
+type Ranking struct {
+	Weights   HybridWeights
+	TextQuery TextQueryMode
+	BM25      BM25Params
+}
+
+// DefaultRanking is the built-in Ranking, used when nothing overrides it.
+func DefaultRanking() Ranking {
+	return Ranking{Weights: DefaultHybridWeights(), TextQuery: TextQueryPlain, BM25: DefaultBM25Params()}
+}
+
+// RankingFromEnv reads the process-wide default Ranking from the environment.
+func RankingFromEnv() Ranking {
+	return Ranking{Weights: HybridWeightsFromEnv(), TextQuery: TextQueryModeFromEnv(), BM25: BM25ParamsFromEnv()}
+}
+
 type EmbeddingsDao struct {
-	pool      *pgxpool.Pool
-	weights   HybridWeights
-	textQuery TextQueryMode
-	bm25      BM25Params
+	pool           *pgxpool.Pool
+	defaultRanking Ranking
 }
 
 func NewEmbeddingsDao(pool *pgxpool.Pool) *EmbeddingsDao {
-	return &EmbeddingsDao{pool: pool, weights: HybridWeightsFromEnv(), textQuery: TextQueryModeFromEnv(), bm25: BM25ParamsFromEnv()}
+	return &EmbeddingsDao{pool: pool, defaultRanking: RankingFromEnv()}
+}
+
+// DefaultRanking is the Ranking a search uses when a request overrides
+// nothing: the environment's values, read once at construction.
+func (dao *EmbeddingsDao) DefaultRanking() Ranking {
+	return dao.defaultRanking
+}
+
+// ParseTextQueryMode returns the TextQueryMode named s, or false when s is not
+// a known mode. Unlike TextQueryModeFromEnv it never falls back.
+func ParseTextQueryMode(s string) (TextQueryMode, bool) {
+	switch mode := TextQueryMode(s); mode {
+	case TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr, TextQueryBM25, TextQueryRareOr:
+		return mode, true
+	}
+	return "", false
+}
+
+// Validate reports the first setting of r that Search cannot use.
+func (r Ranking) Validate() error {
+	switch {
+	case r.Weights.Vector < 0 || r.Weights.Text < 0:
+		return fmt.Errorf("vector_weight and text_weight must be >= 0")
+	case r.Weights.Vector == 0 && r.Weights.Text == 0:
+		return fmt.Errorf("vector_weight and text_weight must not both be 0")
+	case !(r.Weights.RRFRankConstant > 0):
+		return fmt.Errorf("rrf_k must be > 0")
+	}
+	if _, ok := ParseTextQueryMode(string(r.TextQuery)); !ok {
+		return fmt.Errorf("text_query %q is not one of plain, websearch, or, and_or, bm25, rare_or", r.TextQuery)
+	}
+	if r.BM25.K1 < 0 {
+		return fmt.Errorf("bm25_k1 must be >= 0")
+	}
+	if r.BM25.B < 0 || r.BM25.B > 1 {
+		return fmt.Errorf("bm25_b must be in [0, 1]")
+	}
+	if !(r.BM25.MaxDF > 0 && r.BM25.MaxDF <= 1) {
+		return fmt.Errorf("text_max_df must be in (0, 1]")
+	}
+	return nil
 }
 
 // InsertEmbeddings stores one row per chunk under memoryKey. It does not
@@ -319,12 +377,10 @@ const (
 // TextQueryModeFromEnv reads SEARCH_TEXT_QUERY, falling back to
 // TextQueryPlain when it is unset or not a known mode.
 func TextQueryModeFromEnv() TextQueryMode {
-	switch mode := TextQueryMode(os.Getenv("SEARCH_TEXT_QUERY")); mode {
-	case TextQueryPlain, TextQueryWebsearch, TextQueryOr, TextQueryAndOr, TextQueryBM25, TextQueryRareOr:
+	if mode, ok := ParseTextQueryMode(os.Getenv("SEARCH_TEXT_QUERY")); ok {
 		return mode
-	default:
-		return TextQueryPlain
 	}
+	return TextQueryPlain
 }
 
 // BM25Params tunes TextQueryBM25's scoring and TextQueryRareOr's cutoff. A
@@ -432,7 +488,7 @@ const bm25ScoreSQL = `(
 
 // textCandidatesSQL returns the full text-candidates query for mode, and any
 // arguments it binds beyond the shared $1-$10.
-func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode) (string, []any) {
+func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode, bm25 BM25Params) (string, []any) {
 	switch mode {
 	case TextQueryBM25:
 		return fmt.Sprintf(lexemeStatsSQL, "true") + `
@@ -441,7 +497,7 @@ func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode) (string, []any) 
 		 WHERE e.search_vector @@ matched.query
 		   AND` + candidateFilterSQL + `
 		 ORDER BY ` + bm25ScoreSQL + ` DESC NULLS LAST, memory_key, chunk_index
-		 LIMIT $6`, []any{dao.bm25.K1, dao.bm25.B}
+		 LIMIT $6`, []any{bm25.K1, bm25.B}
 	case TextQueryRareOr:
 		return fmt.Sprintf(lexemeStatsSQL, "d.df <= greatest(1, $11::float8 * stats.n)") + `
 		 SELECT memory_key, chunk_index, type
@@ -449,7 +505,7 @@ func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode) (string, []any) 
 		 WHERE e.search_vector @@ matched.query
 		   AND` + candidateFilterSQL + `
 		 ORDER BY ts_rank(e.search_vector, matched.query) DESC NULLS LAST, memory_key, chunk_index
-		 LIMIT $6`, []any{dao.bm25.MaxDF}
+		 LIMIT $6`, []any{bm25.MaxDF}
 	default:
 		from, orderBy := textQuerySQL(mode)
 		return `SELECT memory_key, chunk_index, type
@@ -462,15 +518,15 @@ func (dao *EmbeddingsDao) textCandidatesSQL(mode TextQueryMode) (string, []any) 
 }
 
 // textCandidates returns up to limit chunks whose chunk_text matches
-// queryText (as interpreted by the dao's TextQueryMode), ordered by
+// queryText (as interpreted by ranking.TextQuery), ordered by
 // descending full-text rank, at chunk granularity. An empty or all-stopword
 // queryText matches nothing and is not an error.
-func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, limit int, filters SearchFilters) ([]chunkRef, error) {
+func (dao *EmbeddingsDao) textCandidates(ctx context.Context, queryText string, limit int, filters SearchFilters, ranking Ranking) ([]chunkRef, error) {
 	if strings.TrimSpace(queryText) == "" {
 		return nil, nil
 	}
 
-	query, extraArgs := dao.textCandidatesSQL(dao.textQuery)
+	query, extraArgs := dao.textCandidatesSQL(ranking.TextQuery, ranking.BM25)
 	args := append([]any{queryText, filters.Type, filters.Entity, filters.Since, filters.Until, limit, nilIfEmpty(filters.ACLScope), filters.TomeID, filters.OccurredSince, filters.OccurredUntil}, extraArgs...)
 	rows, err := dao.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -507,13 +563,13 @@ func scanCandidates(rows pgx.Rows) ([]chunkRef, error) {
 }
 
 // Search returns up to k memory keys ranked by a blend of vector similarity
-// and full-text relevance to query (see HybridWeights), after applying
+// and full-text relevance to query (see HybridWeights, blended per ranking), after applying
 // filters and collapsing each key down to its single best-scoring chunk.
 // Fusing two independently-ranked candidate lists needs per-chunk rank
 // bookkeeping that doesn't fit cleanly in one SQL query, so the blend and the
 // final per-key collapse both happen here in Go rather than via SQL's
 // DISTINCT ON as the old vector-only Search did.
-func (dao *EmbeddingsDao) Search(ctx context.Context, queryText string, queryEmbedding []float32, k int, filters SearchFilters) ([]SearchHit, error) {
+func (dao *EmbeddingsDao) Search(ctx context.Context, queryText string, queryEmbedding []float32, k int, filters SearchFilters, ranking Ranking) ([]SearchHit, error) {
 	pool := k * searchCandidateMultiplier
 	if pool < minSearchCandidates {
 		pool = minSearchCandidates
@@ -523,18 +579,18 @@ func (dao *EmbeddingsDao) Search(ctx context.Context, queryText string, queryEmb
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
-	textHits, err := dao.textCandidates(ctx, queryText, pool, filters)
+	textHits, err := dao.textCandidates(ctx, queryText, pool, filters, ranking)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 
-	return dao.fuse(vectorHits, textHits, k), nil
+	return fuse(vectorHits, textHits, k, ranking.Weights), nil
 }
 
 // fuse blends vector- and text-ranked candidate lists via reciprocal-rank
 // fusion and collapses the result to at most one (best-scoring) hit per
 // memory key, sorted by descending score.
-func (dao *EmbeddingsDao) fuse(vectorHits, textHits []chunkRef, k int) []SearchHit {
+func fuse(vectorHits, textHits []chunkRef, k int, weights HybridWeights) []SearchHit {
 	type scored struct {
 		chunkRef
 		score float64
@@ -547,13 +603,13 @@ func (dao *EmbeddingsDao) fuse(vectorHits, textHits []chunkRef, k int) []SearchH
 			s = &scored{chunkRef: ref}
 			scores[ref] = s
 		}
-		s.score += weight / (dao.weights.RRFRankConstant + float64(rank))
+		s.score += weight / (weights.RRFRankConstant + float64(rank))
 	}
 	for i, ref := range vectorHits {
-		add(ref, i+1, dao.weights.Vector)
+		add(ref, i+1, weights.Vector)
 	}
 	for i, ref := range textHits {
-		add(ref, i+1, dao.weights.Text)
+		add(ref, i+1, weights.Text)
 	}
 
 	bestPerKey := make(map[string]*scored)

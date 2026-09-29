@@ -668,3 +668,24 @@ def test_cf_access_credentials_fall_back_to_env_vars(monkeypatch):
 
     assert headers["CF-Access-Client-Id"] == "env-id.access"
     assert headers["CF-Access-Client-Secret"] == "env-secret"
+
+
+async def test_recall_sends_ranking_overrides(patch_async_client):
+    echoed = {"vector_weight": 0.2, "text_weight": 0.4, "rrf_k": 60, "text_query": "bm25"}
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"results": [], "ranking": echoed}))
+
+    client = make_client()
+    result = await client.recall("tea", ranking={"vector_weight": 0.2, "text_query": "bm25"})
+
+    body = json.loads(last_request(patch_async_client).content)
+    assert body["ranking"] == {"vector_weight": 0.2, "text_query": "bm25"}
+    assert result["ranking"] == echoed
+
+
+async def test_recall_omits_ranking_by_default(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"results": []}))
+
+    client = make_client()
+    _ = await client.recall("tea")
+
+    assert "ranking" not in json.loads(last_request(patch_async_client).content)

@@ -1,6 +1,9 @@
 package daos
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestHybridWeightsFromEnvDefaultsAndOverrides(t *testing.T) {
 	if got := HybridWeightsFromEnv(); got != DefaultHybridWeights() {
@@ -78,18 +81,73 @@ func TestFuseWeightsAreConfigurable(t *testing.T) {
 	}
 
 	t.Run("text weight zero collapses to pure vector ranking", func(t *testing.T) {
-		dao := &EmbeddingsDao{weights: HybridWeights{Vector: 1, Text: 0, RRFRankConstant: 60}}
-		hits := dao.fuse(vectorHits, textHits, 10)
+		hits := fuse(vectorHits, textHits, 10, HybridWeights{Vector: 1, Text: 0, RRFRankConstant: 60})
 		if len(hits) < 1 || hits[0].MemoryKey != "textFavorite" {
 			t.Fatalf("expected vector's top hit to win with text weight 0, got %+v", hits)
 		}
 	})
 
 	t.Run("vector weight zero collapses to pure text ranking", func(t *testing.T) {
-		dao := &EmbeddingsDao{weights: HybridWeights{Vector: 0, Text: 1, RRFRankConstant: 60}}
-		hits := dao.fuse(vectorHits, textHits, 10)
+		hits := fuse(vectorHits, textHits, 10, HybridWeights{Vector: 0, Text: 1, RRFRankConstant: 60})
 		if len(hits) < 1 || hits[0].MemoryKey != "keyFavorite" {
 			t.Fatalf("expected text's top hit to win with vector weight 0, got %+v", hits)
 		}
 	})
+}
+
+func TestRankingValidate(t *testing.T) {
+	if err := DefaultRanking().Validate(); err != nil {
+		t.Fatalf("default ranking should be valid: %v", err)
+	}
+	cases := map[string]func(*Ranking){
+		"negative weight":    func(r *Ranking) { r.Weights.Vector = -1 },
+		"both weights zero":  func(r *Ranking) { r.Weights.Vector, r.Weights.Text = 0, 0 },
+		"zero rrf_k":         func(r *Ranking) { r.Weights.RRFRankConstant = 0 },
+		"unknown text_query": func(r *Ranking) { r.TextQuery = "fuzzy" },
+		"zero text_max_df":   func(r *Ranking) { r.BM25.MaxDF = 0 },
+		"text_max_df over 1": func(r *Ranking) { r.BM25.MaxDF = 1.5 },
+		"negative bm25_k1":   func(r *Ranking) { r.BM25.K1 = -1 },
+		"bm25_b over 1":      func(r *Ranking) { r.BM25.B = 2 },
+	}
+	for name, mutate := range cases {
+		r := DefaultRanking()
+		mutate(&r)
+		if err := r.Validate(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	r := DefaultRanking()
+	r.Weights.Text = 0
+	r.BM25.MaxDF = 1
+	if err := r.Validate(); err != nil {
+		t.Errorf("one zero weight and max_df 1 are valid: %v", err)
+	}
+}
+
+// TestFuseConcurrentRankingsAreIndependent runs fuse with opposite weights
+// from many goroutines: the ranking is an argument, not dao state, so neither
+// setting may leak into the other. Run with -race.
+func TestFuseConcurrentRankingsAreIndependent(t *testing.T) {
+	vectorHits := []chunkRef{{MemoryKey: "v", Type: "note"}, {MemoryKey: "t", Type: "note"}}
+	textHits := []chunkRef{{MemoryKey: "t", Type: "note"}}
+	vectorOnly := HybridWeights{Vector: 1, Text: 0, RRFRankConstant: 60}
+	textOnly := HybridWeights{Vector: 0, Text: 1, RRFRankConstant: 60}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if hits := fuse(vectorHits, textHits, 10, vectorOnly); hits[0].MemoryKey != "v" {
+				t.Errorf("vector-only ranking led with %s", hits[0].MemoryKey)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if hits := fuse(vectorHits, textHits, 10, textOnly); hits[0].MemoryKey != "t" {
+				t.Errorf("text-only ranking led with %s", hits[0].MemoryKey)
+			}
+		}()
+	}
+	wg.Wait()
 }

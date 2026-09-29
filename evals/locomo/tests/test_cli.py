@@ -44,17 +44,19 @@ class FakeClient:
         self.tomes.setdefault(tome, {})[key] = content
         return {"key": key}
 
-    async def recall(self, query, k, tome, hydrate=False):
+    async def recall(self, query, k, tome, hydrate=False, ranking=None):
         if self.fail_recall:
             raise RuntimeError("boom")
-        self.recall_calls.append({"query": query, "k": k, "hydrate": hydrate})
+        self.recall_calls.append({"query": query, "k": k, "hydrate": hydrate, "ranking": ranking})
         words = set(query.lower().strip("?").split())
         memories = self.tomes.get(tome, {})
         hits = [key for key, text in memories.items() if words & set(text.lower().split())][:k]
+        # The backend echoes the effective settings: its defaults plus overrides.
+        echoed = {"vector_weight": 0.6, "text_weight": 0.4, "text_query": "plain", **(ranking or {})}
         if hydrate:
             # Hydrated results carry the whole memory document, frontmatter included.
-            return {"results": [{"key": key, "content": f"---\ntype: event\n---\n{memories[key]}\n"} for key in hits]}
-        return {"results": [{"key": key} for key in hits]}
+            return {"results": [{"key": key, "content": f"---\ntype: event\n---\n{memories[key]}\n"} for key in hits], "ranking": echoed}
+        return {"results": [{"key": key} for key in hits], "ranking": echoed}
 
     async def forget(self, key, tome=None):
         self.forgotten.append(key)
@@ -106,7 +108,7 @@ def test_run_fails_loudly_on_unmapped_search_keys(client):
     raw = copy.deepcopy(RAW_SAMPLE)
     raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
 
-    async def recall(query, k, tome, hydrate=False):
+    async def recall(query, k, tome, hydrate=False, ranking=None):
         return {"results": [{"key": "mem_from_somewhere_else.md"}]}
 
     client.recall = recall
@@ -460,3 +462,31 @@ def test_main_compares_lifecycle_with_add_only(tmp_path, monkeypatch, capsys):
     diff = next(line for line in out.splitlines()[out.splitlines().index("temporal") :] if line.startswith("  diff"))
     # diff, n, coverage, recall@1
     assert diff.split()[1:3] == ["-", "+1.000"]
+
+
+def test_ranking_option_parses_json_and_key_value_and_merges():
+    parsed = cli.parse_args(["--ranking", '{"vector_weight": 0.2, "rrf_k": 10}', "--ranking", "text_query=bm25", "--ranking", "rrf_k=30"])
+    assert parsed.ranking == {"vector_weight": 0.2, "rrf_k": 30.0, "text_query": "bm25"}
+    assert cli.parse_args([]).ranking == {}
+
+
+def test_ranking_option_rejects_unknown_keys_and_bad_numbers():
+    for bad in ("nope=1", "vector_weight=abc", "vector_weight", '{"nope": 1}', "{bad"):
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--ranking", bad])
+
+
+def test_run_sends_ranking_and_search_config_is_the_echoed_one(client):
+    sample = parse_sample(RAW_SAMPLE)
+    echoed: list[dict] = []
+    asyncio.run(cli.run(client, args(ranking={"text_weight": 0.9}), [sample], "r1", echoed=echoed))
+
+    assert {c["ranking"]["text_weight"] for c in client.recall_calls} == {0.9}
+    # The config records what the backend said it ran, defaults included.
+    assert cli.search_config(echoed) == {"vector_weight": 0.6, "text_weight": 0.9, "text_query": "plain"}
+
+
+def test_search_config_is_none_without_echo_and_rejects_drift():
+    assert cli.search_config([]) is None
+    with pytest.raises(RuntimeError):
+        cli.search_config([{"rrf_k": 60}, {"rrf_k": 10}])

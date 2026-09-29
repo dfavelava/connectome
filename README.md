@@ -232,6 +232,13 @@ Blend weights are configurable via `backend/.env` (see `backend/.env.example`):
 - `SEARCH_RRF_K` (default `60`) - the RRF rank constant; higher values flatten
   the influence of rank position, so weights matter more than exact rank.
 
+These are defaults. A search request can override any of them for that
+request only with an optional `ranking` object (`vector_weight`,
+`text_weight`, `rrf_k`, `text_query`, `bm25_k1`, `bm25_b`, `text_max_df`);
+omitted fields keep the env value, and invalid values return 400. The
+response's `ranking` echoes the settings that actually ran. The MCP `recall`
+tool does not expose it; it is meant for evals and tuning.
+
 ### Indexing concurrency
 
 Each written memory's chunks are embedded in a single Ollama request.

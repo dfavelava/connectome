@@ -196,8 +196,14 @@ class ConnectomeClient:
         hydrate: bool = False,
         as_: str | None = None,
         tome: str | None = None,
+        ranking: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Search memory by semantic similarity to query and return ranked results.
+
+        ranking overrides the backend's ranking settings for this request only
+        (vector_weight, text_weight, rrf_k, text_query, bm25_k1, bm25_b,
+        text_max_df); omitted keys keep the backend's defaults. The response's
+        "ranking" holds the settings that actually ran.
 
         tome restricts results to that tome; omit to search the default tome.
 
@@ -225,6 +231,8 @@ class ConnectomeClient:
             body["filters"] = filters
         if as_ is not None:
             body["as"] = as_
+        if ranking:
+            body["ranking"] = ranking
 
         response = await self._request("POST", "/memory/search", json_body=body)
         return response.json()

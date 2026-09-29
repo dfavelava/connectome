@@ -18,7 +18,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import time
@@ -160,7 +159,16 @@ async def ingest_extracted(
     return key_map
 
 
-async def query(client: ConnectomeClient, sample: Sample, tome: str, key_map: KeyMap, k: int, concurrency: int) -> tuple[list[QuestionResult], dict[str, int]]:
+async def query(
+    client: ConnectomeClient,
+    sample: Sample,
+    tome: str,
+    key_map: KeyMap,
+    k: int,
+    concurrency: int,
+    ranking: dict[str, object] | None = None,
+    echoed: list[dict[str, object]] | None = None,
+) -> tuple[list[QuestionResult], dict[str, int]]:
     # Evidence is checked against the conversation, not the memories, so
     # turns no memory cites still count against coverage and recall.
     known_dia_ids = {turn.dia_id for turn in sample.turns}
@@ -170,7 +178,9 @@ async def query(client: ConnectomeClient, sample: Sample, tome: str, key_map: Ke
 
     async def ask(question: str) -> tuple[tuple[Context, ...], tuple[tuple[str, ...], ...]]:
         async with semaphore:
-            response = await client.recall(question, k=k, tome=tome, hydrate=True)
+            response = await client.recall(question, k=k, tome=tome, hydrate=True, ranking=ranking)
+        if echoed is not None and isinstance(response.get("ranking"), dict):
+            echoed.append(response["ranking"])
         hits = response.get("results") or []
         assert isinstance(hits, list)
         keys = [hit["key"] for hit in hits]
@@ -228,6 +238,7 @@ async def run(
     run_id: str,
     key_maps: dict[str, KeyMap] | None = None,
     extracted: CachedRun | None = None,
+    echoed: list[dict[str, object]] | None = None,
 ) -> tuple[list[QuestionResult], dict[str, int], dict[str, KeyMap]]:
     """Ingest, score, and destroy each sample's tome, returning the results,
     skip counts, and each sample's key map.
@@ -236,6 +247,8 @@ async def run(
     the turns. Given key_maps (from an earlier --keep-tomes run named
     run_id), ingestion is skipped and that run's tomes are queried and left
     in place instead.
+
+    Each search response's echoed ranking settings are appended to echoed.
     """
     k = recall_k(args)
     reuse = key_maps is not None
@@ -254,7 +267,7 @@ async def run(
             else:
                 key_map = key_maps[sample.sample_id] = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
             ingested = time.monotonic()
-            sample_results, sample_skipped = await query(client, sample, tome, key_map, k, args.concurrency)
+            sample_results, sample_skipped = await query(client, sample, tome, key_map, k, args.concurrency, getattr(args, "ranking", None), echoed)
         finally:
             if not args.keep_tomes and not reuse:
                 await destroy(client, tome)
@@ -267,6 +280,19 @@ async def run(
             file=sys.stderr,
         )
     return results, skipped, key_maps
+
+
+def search_config(echoed: list[dict[str, object]]) -> dict[str, object] | None:
+    """The ranking settings the backend reported running with, or None when it
+    reported none (a backend from before per-request ranking, or no questions
+    scored). The settings are the same for every request of a run, since the
+    harness sends one --ranking; a difference means the backend changed
+    mid-run, which is worth failing over rather than recording one of them."""
+    if not echoed:
+        return None
+    if any(e != echoed[0] for e in echoed):
+        raise RuntimeError("the backend reported different ranking settings within one run")
+    return echoed[0]
 
 
 def memory_stats(key_maps: dict[str, KeyMap], extracted: CachedRun | None = None) -> dict[str, dict[str, float | int]]:
@@ -328,18 +354,9 @@ def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list
         "token_counter": "words and punctuation marks (metrics.count_tokens)",
         "recall_k": recall_k(args),
         "answer_k": args.answer_k,
-        # The backend reads these from its own environment and does not
-        # expose them over HTTP, so they are recorded as reported by the
-        # harness's environment - see the README for keeping the two in sync.
-        "search": {
-            "vector_weight": _float_env("SEARCH_VECTOR_WEIGHT", 0.6),
-            "text_weight": _float_env("SEARCH_TEXT_WEIGHT", 0.4),
-            "rrf_k": _float_env("SEARCH_RRF_K", 60),
-            "text_query": os.environ.get("SEARCH_TEXT_QUERY") or "plain",
-            "bm25_k1": _float_env("SEARCH_BM25_K1", 1.2),
-            "bm25_b": _float_env("SEARCH_BM25_B", 0.75),
-            "text_max_df": _float_env("SEARCH_TEXT_MAX_DF", 0.05),
-        },
+        # Filled in from the ranking the backend echoes on its search
+        # responses (see search_config), not from this process's environment.
+        "search": None,
         "reused_tomes": args.reuse_tomes,
         "embedding_model": args.embedding_model,
         "ingestion": {"mode": args.ingest, "extraction": extracted.config if extracted else None},
@@ -426,6 +443,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="retrieved turns an answer stage will use; recall fetches max(ks + [answer-k]) (default: %(default)s)",
     )
     parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to run (default: all)")
+    parser.add_argument(
+        "--ranking",
+        action="append",
+        type=_ranking,
+        default=[],
+        metavar="JSON|KEY=VALUE",
+        help=f"search ranking overrides sent with every query, as a JSON object or repeatable key=value; keys: {', '.join(RANKING_KEYS)} (default: the backend's)",
+    )
     parser.add_argument("--concurrency", type=int, default=8, help="max in-flight requests (default: %(default)s)")
     parser.add_argument("--timeout", type=float, default=60.0, help="per-request timeout in seconds (default: %(default)s)")
     parser.add_argument("--embedding-model", default="nomic-embed-text", help="recorded in the run config only (default: %(default)s)")
@@ -438,6 +463,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--cleanup", metavar="RUN_ID", help="destroy the tomes left behind by RUN_ID and exit")
     args = parser.parse_args(argv)
+    args.ranking = {k: v for override in args.ranking for k, v in override.items()}
     if not 1 <= args.answer_k <= MAX_SEARCH_K:
         parser.error(f"--answer-k must be between 1 and {MAX_SEARCH_K}")
     return args
@@ -504,6 +530,7 @@ def main(argv: list[str] | None = None) -> None:
     extracted = load_cached_run(args, samples) if args.ingest == EXTRACTED else None
     config = run_config(client, args, samples, run_id, extracted)
     tome_run_id, key_maps = run_id, None
+    echoed: list[dict[str, object]] = []
     if args.reuse_tomes:
         tome_run_id = args.reuse_tomes
         key_maps_path = args.results_dir / f"{tome_run_id}.keys.json"
@@ -518,9 +545,10 @@ def main(argv: list[str] | None = None) -> None:
         if missing := [s.sample_id for s in samples if s.sample_id not in key_maps]:
             sys.exit(f"run {tome_run_id} did not ingest: {', '.join(missing)}")
     try:
-        results, skipped, key_maps = asyncio.run(run(client, args, samples, tome_run_id, key_maps, extracted))
+        results, skipped, key_maps = asyncio.run(run(client, args, samples, tome_run_id, key_maps, extracted, echoed))
     except httpx.HTTPError as exc:
         sys.exit(f"request to {config['base_url']} failed: {exc!r}")
+    config["search"] = search_config(echoed)
     summary = summarize(results, args.ks, args.budgets)
     stats = memory_stats({s.sample_id: key_maps[s.sample_id] for s in samples}, extracted)
 
@@ -603,11 +631,32 @@ def _ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def _float_env(name: str, default: float) -> float:
+RANKING_KEYS = ("vector_weight", "text_weight", "rrf_k", "text_query", "bm25_k1", "bm25_b", "text_max_df")
+
+
+def _ranking(value: str) -> dict[str, object]:
+    """One --ranking argument: a JSON object, or key=value (numbers parsed,
+    text_query left as text). The backend validates the values."""
+    if value.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise argparse.ArgumentTypeError(f"not valid JSON: {exc}") from exc
+    else:
+        key, sep, raw = value.partition("=")
+        if not sep:
+            raise argparse.ArgumentTypeError("expected a JSON object or key=value")
+        parsed = {key.strip(): raw.strip() if key.strip() == "text_query" else _number(raw)}
+    if unknown := set(parsed) - set(RANKING_KEYS):
+        raise argparse.ArgumentTypeError(f"unknown ranking keys {sorted(unknown)}; expected {', '.join(RANKING_KEYS)}")
+    return parsed
+
+
+def _number(raw: str) -> float:
     try:
-        return float(os.environ[name])
-    except (KeyError, ValueError):
-        return default
+        return float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {raw!r}") from exc
 
 
 def _sha256(path: Path) -> str:

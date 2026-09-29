@@ -28,9 +28,15 @@ type fakeSearchIndex struct {
 	gotEmbedding []float32
 	gotK         int
 	gotFilters   daos.SearchFilters
+	gotRanking   daos.Ranking
+
+	defaults daos.Ranking
 }
 
-func (f *fakeSearchIndex) Search(_ context.Context, _ string, queryEmbedding []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error) {
+func (f *fakeSearchIndex) DefaultRanking() daos.Ranking { return f.defaults }
+
+func (f *fakeSearchIndex) Search(_ context.Context, _ string, queryEmbedding []float32, k int, filters daos.SearchFilters, ranking daos.Ranking) ([]daos.SearchHit, error) {
+	f.gotRanking = ranking
 	f.gotEmbedding = queryEmbedding
 	f.gotK = k
 	f.gotFilters = filters
@@ -66,7 +72,7 @@ func newSearchTestServer(t *testing.T, hits []daos.SearchHit, seed map[string]st
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	index := &fakeSearchIndex{hits: hits}
+	index := &fakeSearchIndex{hits: hits, defaults: daos.DefaultRanking()}
 	InitSearchResource(r.Group("/api/connectome"), managers.NewMemoryManagerFromEnv(), fakeEmbedder{}, index)
 
 	srv := httptest.NewServer(r)
@@ -422,5 +428,75 @@ func TestSearchClampsKToMax(t *testing.T) {
 		map[string]string{"Content-Type": "application/json"})
 	if index.gotK != maxSearchK {
 		t.Fatalf("expected k clamped to %d, got %d (%s)", maxSearchK, index.gotK, payload)
+	}
+}
+
+func postSearch(t *testing.T, srv *httptest.Server, body string) (*http.Response, []byte) {
+	t.Helper()
+	return doRequest(t, http.MethodPost, srv.URL+"/api/connectome/memory/search", strings.NewReader(body), map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer " + testToken,
+	})
+}
+
+func TestSearchRankingOverridesMergeOntoDefaults(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+	index.defaults = daos.Ranking{
+		Weights:   daos.HybridWeights{Vector: 0.7, Text: 0.3, RRFRankConstant: 30},
+		TextQuery: daos.TextQueryOr,
+		BM25:      daos.BM25Params{K1: 2, B: 0.5, MaxDF: 0.2},
+	}
+
+	resp, payload := postSearch(t, srv, `{"query":"tea","ranking":{"text_weight":0.9,"text_query":"bm25"}}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	want := index.defaults
+	want.Weights.Text = 0.9
+	want.TextQuery = daos.TextQueryBM25
+	if index.gotRanking != want {
+		t.Fatalf("expected %+v, got %+v", want, index.gotRanking)
+	}
+
+	var body struct {
+		Ranking RankingResponse `json:"ranking"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Ranking != rankingResponse(want) {
+		t.Fatalf("response echoed %+v, want %+v", body.Ranking, rankingResponse(want))
+	}
+}
+
+func TestSearchWithoutRankingUsesDefaultsUnvalidated(t *testing.T) {
+	srv, index := newSearchTestServer(t, nil, nil)
+	// An env config Validate would reject must not break requests that don't
+	// touch ranking.
+	index.defaults = daos.Ranking{Weights: daos.HybridWeights{Vector: 0, Text: 0, RRFRankConstant: 60}, TextQuery: daos.TextQueryPlain, BM25: daos.DefaultBM25Params()}
+
+	resp, payload := postSearch(t, srv, `{"query":"tea"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", resp.StatusCode, payload)
+	}
+	if index.gotRanking != index.defaults {
+		t.Fatalf("expected defaults %+v, got %+v", index.defaults, index.gotRanking)
+	}
+}
+
+func TestSearchRejectsInvalidRanking(t *testing.T) {
+	srv, _ := newSearchTestServer(t, nil, nil)
+	for name, ranking := range map[string]string{
+		"negative weight": `{"vector_weight":-1}`,
+		"both zero":       `{"vector_weight":0,"text_weight":0}`,
+		"rrf_k zero":      `{"rrf_k":0}`,
+		"unknown mode":    `{"text_query":"fuzzy"}`,
+		"max_df zero":     `{"text_max_df":0}`,
+		"max_df over one": `{"text_max_df":1.1}`,
+	} {
+		resp, payload := postSearch(t, srv, `{"query":"tea","ranking":`+ranking+`}`)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d (%s)", name, resp.StatusCode, payload)
+		}
 	}
 }
