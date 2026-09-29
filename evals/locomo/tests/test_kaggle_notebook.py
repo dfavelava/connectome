@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+from locomo_eval.extraction import EXTRACT_VERSION, LIFECYCLE_VERSION
+from locomo_eval.prompts import load_prompt
+
 NOTEBOOK = Path(__file__).resolve().parents[1] / "kaggle.ipynb"
 
 
@@ -34,5 +37,7 @@ def test_default_config_is_valid():
     assert config["STAGE"] in ("extract", "answer")
     assert all(config[name].count(":") == 1 for name in ("EXTRACTOR_MODEL", "ANSWER_MODEL", "JUDGE_MODEL"))
     assert config["REPO_REF"] == "main"
+    assert config["EXTRACT_PROMPT"] == EXTRACT_VERSION
+    assert load_prompt(config["EXTRACT_PROMPT"]).version in (EXTRACT_VERSION, LIFECYCLE_VERSION)
     assert 0 < config["TIME_LIMIT_HOURS"] < 12
     assert config["CONCURRENCY"] >= 1

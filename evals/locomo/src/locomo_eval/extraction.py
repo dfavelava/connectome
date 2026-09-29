@@ -23,6 +23,19 @@ output cap is retried with twice the cap, up to EXTRACT_MAX_NUM_PREDICT.
 Source ids that aren't in the session, and entity references to entities that
 don't exist, are dropped and counted.
 
+The lifecycle variant (`--extract-prompt lifecycle_v1`) also checks what is
+already stored before writing, as an agent that recalls first would. For each
+session it recalls the conversation's own earlier memories - the ones a tome
+built from the cache so far would hold, less those already superseded - with a
+local BM25 search, each turn a query (`recall_memories`), and shows them with
+ids (`M<session>.<n>`) in the prompt. Besides new memories the reply can list
+`duplicates`, stored memories the session only repeats, which are not written
+again, and a new memory can name the stored memories it `supersedes`. Only the
+recalled ids can be referenced; others are dropped and counted. The recall is
+deterministic and local, so extraction still needs no backend and the cache
+stays valid; RECALL_LIMIT and RECALL_PER_TURN are part of the variant, so
+changing them means a new prompt version.
+
 Results are appended to a JSONL cache (fsynced per line), one record per
 session, keyed by dataset sha256, sample, session, extractor model, prompt
 version and sha256, and sampling options. A rerun skips sessions already
@@ -34,10 +47,12 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import sys
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -59,6 +74,10 @@ DEFAULT_DATA_PATH = PROJECT_DIR / "data" / "locomo10.json"
 DEFAULT_CACHE_PATH = PROJECT_DIR / "results" / "extractions.jsonl"
 DEFAULT_EXTRACTOR_MODEL = "ollama:qwen3:8b"
 EXTRACT_VERSION = "extract_v1"
+# Prompts named lifecycle_v<N> select the lifecycle variant; see is_lifecycle.
+LIFECYCLE_VERSION = "lifecycle_v1"
+ADD_ONLY = "add-only"
+LIFECYCLE = "lifecycle"
 EXTRACT = "extract"
 EXTRACT_ATTEMPTS = 3
 OK = "ok"
@@ -75,6 +94,10 @@ EXTRACT_OPTIONS = SamplingOptions(num_ctx=16384, num_predict=4096)
 EXTRACT_MAX_NUM_PREDICT = 8192
 # Context left over the prompt and output when a retry needs a larger num_ctx.
 _CTX_MARGIN = 256
+# Lifecycle variant: the earlier memories recalled for a session - at most
+# RECALL_PER_TURN per turn, RECALL_LIMIT in all.
+RECALL_LIMIT = 30
+RECALL_PER_TURN = 3
 
 _ENTITY_SCHEMA = {
     "type": "object",
@@ -119,10 +142,48 @@ EXTRACTION_SCHEMA = {
     "required": ["entities", "memories"],
     "additionalProperties": False,
 }
+# The lifecycle variant's reply: each memory also names the stored memories it
+# supersedes, and stored memories the session only repeats are listed apart.
+_DUPLICATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "memory_id": {"type": "string"},
+        "source_dia_ids": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["memory_id", "source_dia_ids"],
+    "additionalProperties": False,
+}
+LIFECYCLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {"type": "array", "items": _ENTITY_SCHEMA},
+        "memories": {
+            "type": "array",
+            "items": {
+                **_MEMORY_SCHEMA,
+                "properties": {**_MEMORY_SCHEMA["properties"], "supersedes": {"type": "array", "items": {"type": "string"}}},
+                "required": [*_MEMORY_SCHEMA["required"], "supersedes"],
+            },
+        },
+        "duplicates": {"type": "array", "items": _DUPLICATE_SCHEMA},
+    },
+    "required": ["entities", "memories", "duplicates"],
+    "additionalProperties": False,
+}
 
 _DIA_ID = re.compile(r"^D(\d+):(\d+)$")
 _ENTITY_ID_JUNK = re.compile(r"[^a-z0-9]+")
-DROP_REASONS = ("source_dia_ids", "entity_ids", "entity_refs", "relationships", "occurred_at")
+_WORD = re.compile(r"\w+")
+DROP_REASONS = ("source_dia_ids", "entity_ids", "entity_refs", "relationships", "occurred_at", "memory_refs")
+
+
+def is_lifecycle(prompt: Prompt) -> bool:
+    """Whether a prompt is for the lifecycle variant, which recalls and can supersede."""
+    return prompt.version.startswith(f"{LIFECYCLE}_")
+
+
+def variant_of(prompt: Prompt) -> str:
+    return LIFECYCLE if is_lifecycle(prompt) else ADD_ONLY
 
 
 # --- Sessions -------------------------------------------------------------
@@ -179,6 +240,16 @@ class ExtractedMemory:
     entities: tuple[str, ...]
     relationships: tuple[dict, ...]
     source_dia_ids: tuple[str, ...]
+    # Lifecycle variant: ids of the stored memories this one replaces.
+    supersedes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Duplicate:
+    """Lifecycle variant: a stored memory the session only repeats, so nothing is written."""
+
+    memory_id: str
+    source_dia_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -189,6 +260,8 @@ class Extraction:
     memories: tuple[ExtractedMemory, ...]
     # Items dropped during validation, by DROP_REASONS.
     dropped: dict[str, int] = field(default_factory=dict)
+    # Lifecycle variant only.
+    duplicates: tuple[Duplicate, ...] = ()
 
 
 class ExtractionParseError(ValueError):
@@ -198,6 +271,15 @@ class ExtractionParseError(ValueError):
 def normalize_entity_id(value: str) -> str:
     """Lowercase, with runs of anything but letters and digits as one hyphen."""
     return _ENTITY_ID_JUNK.sub("-", value.lower()).strip("-")
+
+
+def normalize_memory_id(value: str) -> str:
+    return value.strip().upper()
+
+
+def memory_id(session: int, index: int) -> str:
+    """The id a memory is shown under to the lifecycle variant: M<session>.<n>, from 1."""
+    return f"M{session}.{index + 1}"
 
 
 def normalize_occurred_at(value: str | None) -> str | None:
@@ -222,14 +304,28 @@ def _string_list(value: object, what: str) -> list[str]:
     return value
 
 
-def parse_extraction(text: str, session_dia_ids: Iterable[str], known_entity_ids: Iterable[str] = ()) -> Extraction:
-    """Validate an extractor reply against EXTRACTION_SCHEMA.
+def _sources(value: object, session_dia_ids: frozenset[str], dropped: dict[str, int]) -> list[str]:
+    sources: list[str] = []
+    for raw_id in _string_list(value, "source_dia_ids"):
+        canonical = normalize_evidence([raw_id])
+        if len(canonical) != 1 or canonical[0] not in session_dia_ids:
+            dropped["source_dia_ids"] += 1
+        elif canonical[0] not in sources:
+            sources.append(canonical[0])
+    return sources
+
+
+def parse_extraction(text: str, session_dia_ids: Iterable[str], known_entity_ids: Iterable[str] = (), existing_memory_ids: Iterable[str] | None = None) -> Extraction:
+    """Validate an extractor reply against EXTRACTION_SCHEMA, or against
+    LIFECYCLE_SCHEMA when existing_memory_ids (the stored memories the
+    extractor was shown) is given.
 
     A reply with the wrong shape raises ExtractionParseError, which is worth a
     retry. Within a well-formed reply, bad references are dropped and counted
     instead: source ids not in this session, entity ids that normalize to
     nothing, references to entities neither known nor returned, relationships
-    whose endpoints don't exist, and occurred_at values that aren't ISO 8601."""
+    whose endpoints don't exist, occurred_at values that aren't ISO 8601, and
+    memory ids that weren't shown or are superseded or repeated twice."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -237,8 +333,13 @@ def parse_extraction(text: str, session_dia_ids: Iterable[str], known_entity_ids
     _require(isinstance(data, dict), "reply is not a JSON object")
     _require(isinstance(data.get("entities"), list), "reply has no entities list")
     _require(isinstance(data.get("memories"), list), "reply has no memories list")
+    lifecycle = existing_memory_ids is not None
+    existing = frozenset(normalize_memory_id(m) for m in existing_memory_ids or ())
+    if lifecycle:
+        _require(isinstance(data.get("duplicates"), list), "reply has no duplicates list")
     session_dia_ids = frozenset(session_dia_ids)
     dropped = dict.fromkeys(DROP_REASONS, 0)
+    superseded: set[str] = set()
 
     entities: dict[str, Entity] = {}
     for raw in data["entities"]:
@@ -292,13 +393,17 @@ def parse_extraction(text: str, session_dia_ids: Iterable[str], known_entity_ids
                 continue
             relationships.append({"subjectEntityId": subject, "predicate": rel["predicate"].strip(), "objectEntityId": obj, "kind": rel["kind"]})
 
-        sources: list[str] = []
-        for raw_id in _string_list(raw.get("source_dia_ids"), "source_dia_ids"):
-            canonical = normalize_evidence([raw_id])
-            if len(canonical) != 1 or canonical[0] not in session_dia_ids:
-                dropped["source_dia_ids"] += 1
-            elif canonical[0] not in sources:
-                sources.append(canonical[0])
+        sources = _sources(raw.get("source_dia_ids"), session_dia_ids, dropped)
+
+        supersedes: list[str] = []
+        if lifecycle:
+            for ref in _string_list(raw.get("supersedes"), "supersedes"):
+                ref = normalize_memory_id(ref)
+                if ref not in existing or ref in superseded:
+                    dropped["memory_refs"] += 1
+                else:
+                    superseded.add(ref)
+                    supersedes.append(ref)
 
         memories.append(
             ExtractedMemory(
@@ -308,9 +413,22 @@ def parse_extraction(text: str, session_dia_ids: Iterable[str], known_entity_ids
                 entities=tuple(entity_refs),
                 relationships=tuple(relationships),
                 source_dia_ids=tuple(sources),
+                supersedes=tuple(supersedes),
             )
         )
-    return Extraction(entities=tuple(entities.values()), memories=tuple(memories), dropped=dropped)
+
+    duplicates: list[Duplicate] = []
+    for raw in data["duplicates"] if lifecycle else []:
+        _require(isinstance(raw, dict), "a duplicate is not an object")
+        _require(isinstance(raw.get("memory_id"), str), "duplicate memory_id is not a string")
+        ref = normalize_memory_id(raw["memory_id"])
+        sources = _sources(raw.get("source_dia_ids"), session_dia_ids, dropped)
+        # A memory this reply supersedes isn't repeated as it stands.
+        if ref not in existing or ref in superseded or any(d.memory_id == ref for d in duplicates):
+            dropped["memory_refs"] += 1
+            continue
+        duplicates.append(Duplicate(memory_id=ref, source_dia_ids=tuple(sources)))
+    return Extraction(entities=tuple(entities.values()), memories=tuple(memories), dropped=dropped, duplicates=tuple(duplicates))
 
 
 # --- Prompt -----------------------------------------------------------------
@@ -320,14 +438,83 @@ def transcript_line(turn: Turn) -> str:
     return f"{turn.dia_id} {turn.speaker}: {turn.text}"
 
 
-def extraction_prompt(prompt: Prompt, session: Session, known_entities: Sequence[Entity]) -> str:
-    """The extraction prompt for one session, given the entities recorded so far."""
+def existing_memory_line(memory: dict) -> str:
+    return f"{memory['id']} | {(memory.get('occurred_at') or '')[:10] or '-'} | {memory['content']}"
+
+
+def extraction_prompt(prompt: Prompt, session: Session, known_entities: Sequence[Entity], existing_memories: Sequence[dict] = ()) -> str:
+    """The extraction prompt for one session, given the entities recorded so
+    far and, for the lifecycle variant, the stored memories recalled for it."""
     known = "\n".join(f"{e.id} | {e.name} | {e.kind}" for e in known_entities) or "(none yet)"
-    return prompt.render(
-        session_date=session.date or "unknown",
-        known_entities=known,
-        transcript="\n".join(transcript_line(t) for t in session.turns),
-    )
+    fields = {
+        "session_date": session.date or "unknown",
+        "known_entities": known,
+        "transcript": "\n".join(transcript_line(t) for t in session.turns),
+    }
+    if is_lifecycle(prompt):
+        fields["existing_memories"] = "\n".join(existing_memory_line(m) for m in existing_memories) or "(none yet)"
+    return prompt.render(**fields)
+
+
+# --- Recall (lifecycle variant) ----------------------------------------------
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(text.lower())
+
+
+def recall_memories(stored: Sequence[dict], session: Session, *, limit: int = RECALL_LIMIT, per_turn: int = RECALL_PER_TURN) -> list[dict]:
+    """The stored memories related to a session, as the lifecycle extractor
+    sees them: each turn is a BM25 query over the memories' content, its top
+    `per_turn` hits with any shared word are kept at their best score, and the
+    top `limit` of those are returned in the order they were stored. `stored`
+    is the conversation's current memories, oldest first; ties go to the
+    older memory, so the result is deterministic."""
+    if not stored:
+        return []
+    k1, b = 1.2, 0.75
+    docs = [_words(m["content"]) for m in stored]
+    average = sum(map(len, docs)) / len(docs) or 1.0
+    df: dict[str, int] = {}
+    for doc in docs:
+        for word in set(doc):
+            df[word] = df.get(word, 0) + 1
+    idf = {w: math.log(1 + (len(docs) - n + 0.5) / (n + 0.5)) for w, n in df.items()}
+    counts = [Counter(doc) for doc in docs]
+    norms = [k1 * (1 - b + b * len(doc) / average) for doc in docs]
+
+    best: dict[int, float] = {}
+    for turn in session.turns:
+        query = set(_words(turn.text)) & idf.keys()
+        if not query:
+            continue
+        scores = []
+        for i, tf in enumerate(counts):
+            score = sum(idf[w] * tf[w] * (k1 + 1) / (tf[w] + norms[i]) for w in query if w in tf)
+            if score > 0:
+                scores.append((-score, i))
+        for neg, i in sorted(scores)[:per_turn]:
+            best[i] = max(best.get(i, 0.0), -neg)
+    chosen = sorted(best, key=lambda i: (-best[i], i))[:limit]
+    return [stored[i] for i in sorted(chosen)]
+
+
+def stored_memories(record: dict) -> list[dict]:
+    """A successful session record's memories, each with its id."""
+    return [{**m, "id": memory_id(record["session"], i)} for i, m in enumerate(record["memories"])]
+
+
+def superseded_ids(record: dict) -> set[str]:
+    return {ref for m in record["memories"] for ref in m.get("supersedes") or ()}
+
+
+def after_record(stored: list[dict], record: dict) -> list[dict]:
+    """The conversation's current memories once a session record is applied:
+    what it supersedes goes, its new memories are added."""
+    if record["status"] != OK:
+        return stored
+    gone = superseded_ids(record)
+    return [m for m in stored if m["id"] not in gone] + stored_memories(record)
 
 
 # --- Extractors -------------------------------------------------------------
@@ -359,7 +546,7 @@ class Extractor(Protocol):
     prompt: Prompt
     options: SamplingOptions
 
-    async def extract(self, session: Session, known_entities: Sequence[Entity]) -> SessionExtraction: ...
+    async def extract(self, session: Session, known_entities: Sequence[Entity], existing_memories: Sequence[dict] = ()) -> SessionExtraction: ...
 
 
 class OllamaExtractor:
@@ -381,9 +568,12 @@ class OllamaExtractor:
         self.attempts = attempts
         self.max_num_predict = max_num_predict
 
-    async def extract(self, session: Session, known_entities: Sequence[Entity]) -> SessionExtraction:
-        text = extraction_prompt(self.prompt, session, known_entities)
+    async def extract(self, session: Session, known_entities: Sequence[Entity], existing_memories: Sequence[dict] = ()) -> SessionExtraction:
+        text = extraction_prompt(self.prompt, session, known_entities, existing_memories)
         known_ids = [e.id for e in known_entities]
+        lifecycle = is_lifecycle(self.prompt)
+        schema = LIFECYCLE_SCHEMA if lifecycle else EXTRACTION_SCHEMA
+        existing_ids = [m["id"] for m in existing_memories] if lifecycle else None
         input_tokens = output_tokens = truncated = 0
         num_predict, num_ctx = self.options.num_predict, self.options.num_ctx
         error = None
@@ -391,7 +581,7 @@ class OllamaExtractor:
         started = time.monotonic()
         for attempt in range(self.attempts):
             options = replace(retry_options(self.options, attempt), num_predict=num_predict, num_ctx=num_ctx)
-            completion = await self.client.complete(self.model, "", text, stage=EXTRACT, format=EXTRACTION_SCHEMA, options=options)
+            completion = await self.client.complete(self.model, "", text, stage=EXTRACT, format=schema, options=options)
             input_tokens += completion.input_tokens
             output_tokens += completion.output_tokens
             # Ollama reports done_reason "length"; the count is a fallback for servers that don't.
@@ -402,7 +592,7 @@ class OllamaExtractor:
                 num_ctx = max(num_ctx, completion.input_tokens + num_predict + _CTX_MARGIN)
                 continue
             try:
-                extraction = parse_extraction(completion.text, session.dia_ids, known_ids)
+                extraction = parse_extraction(completion.text, session.dia_ids, known_ids, existing_ids)
             except ExtractionParseError as exc:
                 error = str(exc)
                 continue
@@ -472,7 +662,15 @@ class ExtractionCache:
             self.failed[key] = record
 
 
-def session_record(dataset_sha256: str, session: Session, extractor: Extractor, known_entities: Sequence[Entity], result: SessionExtraction, model_digest: str | None) -> dict:
+def session_record(
+    dataset_sha256: str,
+    session: Session,
+    extractor: Extractor,
+    known_entities: Sequence[Entity],
+    result: SessionExtraction,
+    model_digest: str | None,
+    recalled: Sequence[dict] | None = None,
+) -> dict:
     extraction = result.extraction
     return {
         "dataset_sha256": dataset_sha256,
@@ -491,6 +689,9 @@ def session_record(dataset_sha256: str, session: Session, extractor: Extractor, 
         "known_entity_ids": [e.id for e in known_entities],
         "entities": [asdict(e) for e in extraction.entities] if extraction else [],
         "memories": [asdict(m) for m in extraction.memories] if extraction else [],
+        # Lifecycle variant: the stored memories it was shown, and the ones the session only repeated.
+        "recalled_memory_ids": [m["id"] for m in recalled] if recalled is not None else None,
+        "duplicates": [asdict(d) for d in extraction.duplicates] if extraction else [],
         "dropped": extraction.dropped if extraction else {},
         "attempts": result.attempts,
         # The options of the attempt recorded here; they differ from "options" after a retry.
@@ -528,6 +729,9 @@ class SampleTally:
     cached: int = 0
     failed: list[int] = field(default_factory=list)
     memories: int = 0
+    # Lifecycle variant: stored memories repeated rather than written again, and replaced.
+    duplicates: int = 0
+    superseded: int = 0
     dropped: dict[str, int] = field(default_factory=lambda: dict.fromkeys(DROP_REASONS, 0))
     input_tokens: int = 0
     output_tokens: int = 0
@@ -541,6 +745,8 @@ class SampleTally:
         else:
             self.extracted += 1
         self.memories += len(record["memories"])
+        self.duplicates += len(record.get("duplicates") or ())
+        self.superseded += len(superseded_ids(record))
         for reason, count in record["dropped"].items():
             self.dropped[reason] = self.dropped.get(reason, 0) + count
         if not cached:
@@ -563,20 +769,24 @@ async def extract_sample(
     sample's turns, never the Sample, so its questions can't reach a prompt.
 
     The entities recorded so far - from cached and fresh sessions alike - are
-    passed to each session. A failed session contributes none and the run
-    moves on."""
+    passed to each session, and for the lifecycle variant the current memories
+    recalled for it. A failed session contributes none and the run moves on."""
     tally = SampleTally(sample_id)
     registry: dict[str, Entity] = {}
+    lifecycle = is_lifecycle(extractor.prompt)
+    stored: list[dict] = []
     for session in sessions_of(sample_id, turns):
         tally.sessions += 1
         record = cache.get(cache_key(dataset_sha256, sample_id, session.number, extractor))
         cached = record is not None
         if record is None:
             known = list(registry.values())
-            result = await extractor.extract(session, known)
-            record = session_record(dataset_sha256, session, extractor, known, result, model_digest)
+            recalled = recall_memories(stored, session) if lifecycle else None
+            result = await extractor.extract(session, known, recalled or ())
+            record = session_record(dataset_sha256, session, extractor, known, result, model_digest, recalled)
             cache.append(record)
         merge_entities(registry, record["entities"])
+        stored = after_record(stored, record)
         tally.add(record, cached)
         if on_session:
             on_session(record, cached)
@@ -615,7 +825,9 @@ class CachedRun:
     config: dict
 
     def memories(self, sample_id: str) -> list[dict]:
-        return [m for record in self.records[sample_id] for m in record["memories"]]
+        """Every memory written, each with its id (see memory_id), in session order.
+        Superseded ones are included; their successors name them in `supersedes`."""
+        return [m for record in self.records[sample_id] for m in stored_memories(record)]
 
     def entity_ids(self, sample_id: str) -> set[str]:
         return {e["id"] for record in self.records[sample_id] for e in record["entities"]}
@@ -662,6 +874,10 @@ def cached_run(
         "extractor_model": extractor_model,
         "model_digests": sorted({r["model_digest"] for r in every if r.get("model_digest")}),
         "prompt": prompt.config(),
+        "variant": variant_of(prompt),
+        "recall": {"limit": RECALL_LIMIT, "per_turn": RECALL_PER_TURN, "method": "bm25 over the conversation's current memories, one query per turn"}
+        if is_lifecycle(prompt)
+        else None,
         "options": asdict(options),
         "options_hash": options_hash(options),
         "totals": {
@@ -670,6 +886,8 @@ def cached_run(
             "failed_sessions": failed,
             "unextracted_sessions": unextracted,
             "memories": sum(len(r["memories"]) for r in every),
+            "duplicates": sum(len(r.get("duplicates") or ()) for r in every),
+            "superseded": sum(len(superseded_ids(r)) for r in every),
             "attempts": sum(r["attempts"] for r in every),
             "input_tokens": sum(r["input_tokens"] for r in every),
             "output_tokens": sum(r["output_tokens"] for r in every),
@@ -681,10 +899,10 @@ def cached_run(
 
 
 def print_tallies(tallies: list[SampleTally]) -> None:
-    columns = ("sessions", "extracted", "cached", "failed", "memories", "dropped_ids", "in_tokens", "out_tokens", "seconds")
+    columns = ("sessions", "extracted", "cached", "failed", "memories", "duplicates", "superseded", "dropped_ids", "in_tokens", "out_tokens", "seconds")
     print(f"{'sample':<10}" + "".join(f"{c:>12}" for c in columns))
     for t in tallies:
-        cells = (t.sessions, t.extracted, t.cached, len(t.failed), t.memories, t.dropped["source_dia_ids"], t.input_tokens, t.output_tokens, f"{t.seconds:.0f}")
+        cells = (t.sessions, t.extracted, t.cached, len(t.failed), t.memories, t.duplicates, t.superseded, t.dropped["source_dia_ids"], t.input_tokens, t.output_tokens, f"{t.seconds:.0f}")
         print(f"{t.sample_id:<10}" + "".join(f"{c:>12}" for c in cells))
 
 
@@ -694,7 +912,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="JSONL cache of extracted sessions (default: %(default)s)")
     parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to extract (default: all)")
     parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="provider:model that extracts (default: %(default)s)")
-    parser.add_argument("--extract-prompt", default=EXTRACT_VERSION, help="extraction prompt version (default: %(default)s)")
+    parser.add_argument(
+        "--extract-prompt",
+        default=EXTRACT_VERSION,
+        help=f"extraction prompt version; {LIFECYCLE}_v<N> runs the variant that recalls and supersedes (default: %(default)s)",
+    )
     parser.add_argument("--attempts", type=int, default=EXTRACT_ATTEMPTS, help="tries per session before it is recorded as failed (default: %(default)s)")
     parser.add_argument("--concurrency", type=int, default=1, help="samples extracted at once; sessions within a sample always run in order (default: %(default)s)")
     parser.add_argument("--timeout", type=float, default=900.0, help="per-call timeout in seconds (default: %(default)s)")
@@ -728,7 +950,12 @@ def main(argv: list[str] | None = None) -> None:
     def on_session(record: dict, cached: bool) -> None:
         if cached:
             return
-        status = f"{len(record['memories'])} memories" if record["status"] == OK else f"FAILED after {record['attempts']} attempts: {record['error']}"
+        if record["status"] != OK:
+            status = f"FAILED after {record['attempts']} attempts: {record['error']}"
+        elif record.get("recalled_memory_ids") is not None:
+            status = f"{len(record['memories'])} memories, {len(record['duplicates'])} duplicates, {len(superseded_ids(record))} superseded of {len(record['recalled_memory_ids'])} recalled"
+        else:
+            status = f"{len(record['memories'])} memories"
         print(
             f"{record['sample_id']} session {record['session']}: {status} "
             f"({record['input_tokens']} in / {record['output_tokens']} out tokens, {record['seconds']:.1f}s)",
@@ -739,7 +966,7 @@ def main(argv: list[str] | None = None) -> None:
         async with LLMClient(options=EXTRACT_OPTIONS, concurrency=args.concurrency, timeout=args.timeout, pricing=load_pricing()) as client:
             extractor = OllamaExtractor(client, args.extractor_model, prompt, attempts=args.attempts)
             pending = pending_sessions(cache, extractor, dataset_sha256, conversations)
-            print(f"{pending} sessions to extract with {args.extractor_model} ({prompt.version}); cache {args.cache}", file=sys.stderr)
+            print(f"{pending} sessions to extract with {args.extractor_model} ({prompt.version}, {variant_of(prompt)}); cache {args.cache}", file=sys.stderr)
             digest = None
             if pending:
                 # Fails before any call if the model isn't pulled; a fully cached run needs no Ollama.

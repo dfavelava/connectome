@@ -414,8 +414,9 @@ one stage under a time limit, and leaves `results/` as the version's output.
 2. Import the notebook, set **Accelerator: GPU** and **Internet: on**, and add
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
-3. Set `STAGE` and the models in the first cell, then **Save Version -> Save &
-   Run All (Commit)**. The run continues with the browser closed.
+3. Set `STAGE` and the models in the first cell (and, for `extract`,
+   `EXTRACT_PROMPT`: `extract_v1` or `lifecycle_v1`), then **Save Version ->
+   Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
 
 To resume a stopped run, add the previous version's output as an input and
@@ -423,3 +424,77 @@ commit again: the notebook merges every attached `results/` folder back in,
 and the stage skips work already cached. The stage stops itself after
 `TIME_LIMIT_HOURS` (default 11) so the output is saved before Kaggle's
 ~12-hour limit. Time `SAMPLES = "conv-26"` first; a full run is about 13x that.
+
+### Lifecycle extraction: recall before writing (`lifecycle_v1`)
+
+The extractor above only adds memories; it never looks at what's already
+stored. The lifecycle variant does what an agent that recalls before writing
+would: it avoids duplicates and replaces claims that no longer hold. It is
+selected by its prompt, [`lifecycle_v1`](src/locomo_eval/prompts/lifecycle_v1.txt),
+so it is cached beside the add-only extraction under its own prompt version:
+
+```bash
+uv run locomo-eval extract --samples conv-26 --extractor-model ollama:qwen3:8b                                  # add-only
+uv run locomo-eval extract --samples conv-26 --extractor-model ollama:qwen3:8b --extract-prompt lifecycle_v1    # lifecycle
+```
+
+On Kaggle, set `EXTRACT_PROMPT = "lifecycle_v1"` in the notebook's first cell.
+Commit the add-only and lifecycle runs as separate versions with the same
+`EXTRACTOR_MODEL` and `SAMPLES`, attaching the earlier version's output so both
+end up in one `extractions.jsonl`, then score them locally as below.
+
+**How it works.** Sessions still run in order. Before each one, the
+conversation's own earlier memories - what its tome would hold after the
+sessions so far, less anything already superseded - are searched with each
+turn as a query (BM25 on the memory text; up to 3 hits per turn and 30 in all,
+`RECALL_PER_TURN` / `RECALL_LIMIT`). The hits are shown in the prompt as
+`M<session>.<n> | <occurred_at date> | <content>`. Besides entities and
+memories, the reply has:
+
+- `supersedes` on each new memory - ids of stored memories it replaces
+  because they are no longer true (a plan carried out or cancelled, a move, a
+  new job);
+- `duplicates` - stored memories the session only repeats, with the turns
+  that repeat them. Nothing is written for them.
+
+Only recalled ids can be referenced; other ids, a memory superseded twice, or
+one both superseded and repeated are dropped and counted under
+`dropped.memory_refs`. Each record also stores `recalled_memory_ids`. The
+recall is local and deterministic rather than a call to the backend's
+`recall`, so extraction still needs no backend and a cached session stays
+valid; changing the recall limits means a new prompt version. The extract
+table gains `duplicates` and `superseded` columns (always 0 for add-only).
+
+**Scoring.** `--ingest extracted --extract-prompt lifecycle_v1` ingests it
+like any extraction. Every memory is written, then each superseded one is
+handled per `--superseded`:
+
+- `mark` (default) - each of its relationships gets `superseded_by` the new
+  memory's key (`supersede_relationship`), as an agent would do today. Recall
+  doesn't filter on `superseded_by` yet, so the old memory can still be
+  retrieved.
+- `forget` - it is forgotten, so recall can't return it and it no longer
+  counts towards coverage.
+
+Duplicates aren't written, so a turn that only repeats an earlier memory is
+cited by nothing; if a question's evidence is that later turn, coverage drops.
+That cost is part of what the comparison measures.
+
+**Comparing the variants.** Run both on the same samples and extractor model,
+then compare per category:
+
+```bash
+uv run locomo-eval --run-id add-only --ingest extracted --extractor-model ollama:qwen3:8b
+uv run locomo-eval --run-id lifecycle --ingest extracted --extractor-model ollama:qwen3:8b \
+  --extract-prompt lifecycle_v1 --compare add-only
+uv run locomo-eval --run-id lifecycle-forget --ingest extracted --extractor-model ollama:qwen3:8b \
+  --extract-prompt lifecycle_v1 --superseded forget --compare add-only
+```
+
+With `--compare`, each category shows this run, the baseline, and a `diff`
+row (this run minus the baseline). Runs are labelled by what they ingested,
+e.g. `extracted: add-only` or `extracted: lifecycle, forget`. The config
+records `ingestion.extraction.variant`, its `recall` settings, the
+`duplicates` and `superseded` totals, and `chunking.superseded`. The answer
+stage (`locomo-eval answer <run-id>`) scores each run the same way, so the
+temporal category's judge accuracy can be compared as well.
