@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 
+import httpx
 import pytest
 
 from locomo_eval import cli
@@ -68,6 +69,12 @@ class FakeClient:
         self.superseded.append({"key": key, "subject": subject_entity_id, "predicate": predicate, "object": object_entity_id, "superseded_by": superseded_by})
         return {}
 
+    async def get_memory(self, key, tome=None):
+        if key not in self.tomes.get(tome, {}):
+            request = httpx.Request("GET", f"{self.base_url}/memory/")
+            raise httpx.HTTPStatusError("not found", request=request, response=httpx.Response(404, request=request))
+        return {"content": self.tomes[tome][key]}
+
     async def destroy_tome(self, tome, confirm=False):
         self.destroyed.append(tome)
         self.tomes.pop(tome, None)
@@ -84,9 +91,24 @@ def args(**overrides):
     return argparse.Namespace(**{**defaults, **overrides})
 
 
+def run(client, a, samples, run_id, extracted=None, echoed=None):
+    """ingest, retrieve, then (unless keep_tomes) cleanup, as the default command does."""
+
+    async def stages():
+        key_maps = await cli.ingest_samples(client, a, samples, run_id, extracted)
+        try:
+            results, skipped = await cli.retrieve_samples(client, a, samples, run_id, key_maps, echoed)
+        finally:
+            if not a.keep_tomes:
+                await cli.cleanup(client, [s.sample_id for s in samples], run_id)
+        return results, skipped, key_maps
+
+    return asyncio.run(stages())
+
+
 def test_run_ingests_scores_and_destroys_tome(client):
     sample = parse_sample(RAW_SAMPLE)
-    results, skipped, key_maps = asyncio.run(cli.run(client, args(), [sample], "r1"))
+    results, skipped, key_maps = run(client, args(), [sample], "r1")
 
     assert [c["content"] for c in client.remember_calls][0] == "[1:56 pm on 8 May, 2023] Caroline: Hey Mel!"
     assert client.remember_calls[0]["tome"] == "temp-locomo-r1-conv-1"
@@ -100,7 +122,7 @@ def test_run_ingests_scores_and_destroys_tome(client):
 def test_run_maps_tome_scoped_search_keys_back_to_dialog_ids(client):
     raw = copy.deepcopy(RAW_SAMPLE)
     raw["qa"].append({"question": "Back?", "evidence": ["D2:1"], "category": 4})
-    results, _, _ = asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r4"))
+    results, _, _ = run(client, args(), [parse_sample(raw)], "r4")
     assert results[-1].retrieved == ("D2:1",)
 
 
@@ -113,7 +135,7 @@ def test_run_fails_loudly_on_unmapped_search_keys(client):
 
     client.recall = recall
     with pytest.raises(RuntimeError, match="not ingested"):
-        asyncio.run(cli.run(client, args(), [parse_sample(raw)], "r5"))
+        run(client, args(), [parse_sample(raw)], "r5")
     assert client.destroyed == ["temp-locomo-r5-conv-1"]
 
 
@@ -121,13 +143,13 @@ def test_run_destroys_tome_on_failure(client):
     sample = parse_sample(RAW_SAMPLE)
     client.fail_recall = True
     with pytest.raises(RuntimeError):
-        asyncio.run(cli.run(client, args(), [sample], "r2"))
+        run(client, args(), [sample], "r2")
     assert client.destroyed == ["temp-locomo-r2-conv-1"]
 
 
 def test_no_occurred_at_and_keep_tomes(client):
     sample = parse_sample(RAW_SAMPLE)
-    asyncio.run(cli.run(client, args(no_occurred_at=True, keep_tomes=True), [sample], "r3"))
+    run(client, args(no_occurred_at=True, keep_tomes=True), [sample], "r3")
     assert all(c["occurred_at"] is None for c in client.remember_calls)
     assert client.destroyed == []
 
@@ -140,24 +162,23 @@ def test_ks_parsing():
         cli._ks("51")
 
 
-def test_reuse_tomes_queries_kept_tomes_without_ingesting(client):
+def test_retrieve_queries_kept_tomes_without_ingesting(client):
     sample = parse_sample(RAW_SAMPLE)
-    _, _, key_maps = asyncio.run(cli.run(client, args(keep_tomes=True), [sample], "r6"))
+    _, _, key_maps = run(client, args(keep_tomes=True), [sample], "r6")
     assert set(key_maps["conv-1"].values()) == {(t.dia_id,) for t in sample.turns}
     ingested = len(client.remember_calls)
 
-    results, _, reused = asyncio.run(cli.run(client, args(), [sample], "r6", key_maps))
+    results, _ = asyncio.run(cli.retrieve_samples(client, args(), [sample], "r6", key_maps))
 
     assert len(client.remember_calls) == ingested
     assert client.destroyed == []
-    assert reused == key_maps
     assert [r.question for r in results] == ["When?", "Adversarial?"]
 
 
 def test_run_saves_hydrated_contexts_and_gold_answers(client):
     raw = copy.deepcopy(RAW_SAMPLE)
     raw["qa"].append({"question": "Hey back again?", "answer": 2022, "evidence": ["D2:1"], "category": 4})
-    results, _, _ = asyncio.run(cli.run(client, args(ks=[1], answer_k=3), [parse_sample(raw)], "r7"))
+    results, _, _ = run(client, args(ks=[1], answer_k=3), [parse_sample(raw)], "r7")
 
     assert all(c["hydrate"] and c["k"] == 3 for c in client.recall_calls)
     when, adversarial, back = results
@@ -295,7 +316,7 @@ def test_extracted_ingestion_writes_memories_and_maps_keys_to_sources(client, tm
     ]
     sample = parse_sample(raw)
     extracted = cached(tmp_path, sample)
-    results, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted"), [sample], "x1", extracted=extracted))
+    results, _, key_maps = run(client, args(ingest="extracted"), [sample], "x1", extracted=extracted)
 
     first = client.remember_calls[0]
     assert first["content"] == SESSION_1[0]["content"]
@@ -326,12 +347,12 @@ def test_extracted_ingestion_writes_memories_and_maps_keys_to_sources(client, tm
 
 def test_extracted_ingestion_can_leave_occurred_at_unset(client, tmp_path):
     sample = parse_sample(RAW_SAMPLE)
-    asyncio.run(cli.run(client, args(ingest="extracted", no_occurred_at=True), [sample], "x2", extracted=cached(tmp_path, sample)))
+    run(client, args(ingest="extracted", no_occurred_at=True), [sample], "x2", extracted=cached(tmp_path, sample))
     assert all(c["occurred_at"] is None for c in client.remember_calls)
 
 
 def test_turns_ingestion_covers_all_evidence(client):
-    results, _, _ = asyncio.run(cli.run(client, args(), [parse_sample(RAW_SAMPLE)], "t1"))
+    results, _, _ = run(client, args(), [parse_sample(RAW_SAMPLE)], "t1")
     assert all(r.covered == r.evidence for r in results)
 
 
@@ -411,7 +432,7 @@ def test_lifecycle_ingestion_marks_superseded_relationships(client, tmp_path):
     sample = parse_sample(RAW_SAMPLE)
     extracted = lifecycle_cached(tmp_path, sample)
     assert (extracted.config["totals"]["duplicates"], extracted.config["totals"]["superseded"]) == (1, 1)
-    _, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted", keep_tomes=True), [sample], "l1", extracted=extracted))
+    _, _, key_maps = run(client, args(ingest="extracted", keep_tomes=True), [sample], "l1", extracted=extracted)
     assert len(client.remember_calls) == 4
     old_key, new_key = "mem_1.md", "mem_4.md"
     assert client.superseded == [{"key": old_key, "subject": "caroline", "predicate": "friend_of", "object": "melanie", "superseded_by": new_key}]
@@ -423,7 +444,7 @@ def test_lifecycle_ingestion_marks_superseded_relationships(client, tmp_path):
 def test_lifecycle_ingestion_can_forget_superseded_memories(client, tmp_path):
     sample = parse_sample(RAW_SAMPLE)
     extracted = lifecycle_cached(tmp_path, sample)
-    _, _, key_maps = asyncio.run(cli.run(client, args(ingest="extracted", superseded="forget"), [sample], "l2", extracted=extracted))
+    _, _, key_maps = run(client, args(ingest="extracted", superseded="forget"), [sample], "l2", extracted=extracted)
     assert client.forgotten == ["mem_1.md"]
     assert client.superseded == []
     assert sorted(key_maps["conv-1"].values()) == [(), ("D1:2",), ("D2:1",)]
@@ -431,7 +452,7 @@ def test_lifecycle_ingestion_can_forget_superseded_memories(client, tmp_path):
 
 def test_add_only_ingestion_supersedes_nothing(client, tmp_path):
     sample = parse_sample(RAW_SAMPLE)
-    asyncio.run(cli.run(client, args(ingest="extracted", superseded="forget"), [sample], "a1", extracted=cached(tmp_path, sample)))
+    run(client, args(ingest="extracted", superseded="forget"), [sample], "a1", extracted=cached(tmp_path, sample))
     assert client.forgotten == [] and client.superseded == []
 
 
@@ -479,7 +500,7 @@ def test_ranking_option_rejects_unknown_keys_and_bad_numbers():
 def test_run_sends_ranking_and_search_config_is_the_echoed_one(client):
     sample = parse_sample(RAW_SAMPLE)
     echoed: list[dict] = []
-    asyncio.run(cli.run(client, args(ranking={"text_weight": 0.9}), [sample], "r1", echoed=echoed))
+    run(client, args(ranking={"text_weight": 0.9}), [sample], "r1", echoed=echoed)
 
     assert {c["ranking"]["text_weight"] for c in client.recall_calls} == {0.9}
     # The config records what the backend said it ran, defaults included.
@@ -490,3 +511,201 @@ def test_search_config_is_none_without_echo_and_rejects_drift():
     assert cli.search_config([]) is None
     with pytest.raises(RuntimeError):
         cli.search_config([{"rrf_k": 60}, {"rrf_k": 10}])
+
+
+# --- Stages: ingest, retrieve, cleanup -----------------------------------------
+
+
+@pytest.fixture
+def stage_env(tmp_path, monkeypatch):
+    """A dataset on disk and one FakeClient every main() call shares, as one backend would."""
+    raw = copy.deepcopy(RAW_SAMPLE)
+    raw["qa"].append({"question": "Did Caroline come back?", "answer": "yes", "evidence": ["D2:1"], "category": 2})
+    data = tmp_path / "locomo.json"
+    data.write_text(json.dumps([raw]), encoding="utf-8")
+    backend = FakeClient()
+    monkeypatch.setattr(cli, "ConnectomeClient", lambda *a, **kw: backend)
+    return backend, ["--data", str(data), "--results-dir", str(tmp_path)], tmp_path
+
+
+def read(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_ingest_then_retrieve_matches_the_default_command(stage_env, capsys):
+    backend, common, tmp_path = stage_env
+    cli.main([*common, "--run-id", "all"])
+    cli.main(["ingest", *common, "--run-id", "base"])
+    assert "temp-locomo-base-conv-1" in backend.tomes
+    cli.main(["retrieve", "base", *common])
+
+    staged, default = read(tmp_path / "base.json"), read(tmp_path / "all.json")
+    assert staged["summary"] == default["summary"]
+    assert staged["memories"] == default["memories"]
+    assert staged["skipped"] == default["skipped"]
+    assert [q["retrieved"] for q in staged["questions"]] == [q["retrieved"] for q in default["questions"]]
+    assert staged["config"]["reused_tomes"] == "base" and default["config"]["reused_tomes"] is None
+    assert list(staged["config"]) == list(default["config"])
+    # The default command cleaned up after itself; the ingest's tomes stay.
+    assert read(tmp_path / "all.ingest.json")["tomes"] == "destroyed"
+    assert "temp-locomo-all-conv-1" not in backend.tomes and "temp-locomo-base-conv-1" in backend.tomes
+    assert "locomo-eval retrieve base" in capsys.readouterr().out
+
+
+def test_ingest_manifest_round_trip(stage_env):
+    backend, common, tmp_path = stage_env
+    cli.main(["ingest", *common, "--run-id", "base", "--no-occurred-at", "--embedding-model", "m"])
+    manifest = read(tmp_path / "base.ingest.json")
+
+    assert manifest["dataset"]["sha256"] == hashlib.sha256((tmp_path / "locomo.json").read_bytes()).hexdigest()
+    assert manifest["samples"] == ["conv-1"]
+    assert manifest["embedding_model"] == "m"
+    assert manifest["ingestion"] == {"mode": "turns", "extraction": None}
+    assert manifest["chunking"]["occurred_at"] is None
+    assert manifest["tomes"] == "kept"
+    assert manifest["memories"]["conv-1"]["memories"] == 3
+    key_maps = cli.load_key_maps(manifest["key_maps"])
+    assert set(key_maps["conv-1"]) == set(backend.tomes["temp-locomo-base-conv-1"])
+    assert sorted(key_maps["conv-1"].values()) == [("D1:1",), ("D1:2",), ("D2:1",)]
+    assert not (tmp_path / "base.keys.json").exists()
+
+
+def test_retrieve_runs_tagged_configs_against_one_ingest(stage_env, capsys):
+    backend, common, tmp_path = stage_env
+    cli.main(["ingest", *common, "--run-id", "base"])
+    ingested = len(backend.remember_calls)
+    cli.main(["retrieve", "base", *common, "--tag", "plain"])
+    cli.main(["retrieve", "base", *common, "--tag", "bm25", "--ranking", "text_query=bm25", "--compare", "base.plain"])
+
+    assert len(backend.remember_calls) == ingested
+    plain, bm25 = read(tmp_path / "base.plain.json"), read(tmp_path / "base.bm25.json")
+    assert plain["config"]["search"]["text_query"] == "plain"
+    assert bm25["config"]["search"]["text_query"] == "bm25"
+    assert bm25["config"]["run_id"] == "base.bm25"
+    assert not (tmp_path / "base.json").exists()
+    out = capsys.readouterr().out
+    assert "  base.bm25 (turns)" in out and "  base.plain (turns)" in out and "  diff" in out
+
+
+def test_retrieve_rejects_bad_tags():
+    for bad in ("ingest", "keys", "a.b", "", "-x"):
+        with pytest.raises(SystemExit):
+            cli.parse_retrieve_args(["base", "--tag", bad])
+    assert cli.parse_retrieve_args(["base", "--tag", "bm25_k1-2"]).tag == "bm25_k1-2"
+
+
+def test_retrieve_fails_without_a_manifest(stage_env):
+    _, common, _ = stage_env
+    with pytest.raises(SystemExit, match="run `locomo-eval ingest --run-id nope` first"):
+        cli.main(["retrieve", "nope", *common])
+
+
+def test_retrieve_fails_when_tomes_are_missing(stage_env):
+    backend, common, _ = stage_env
+    cli.main(["ingest", *common, "--run-id", "base"])
+    backend.tomes.clear()  # e.g. the backend's volume was reset
+    with pytest.raises(SystemExit, match="tomes missing .*temp-locomo-base-conv-1"):
+        cli.main(["retrieve", "base", *common])
+    assert backend.recall_calls == []
+
+
+def test_retrieve_fails_after_cleanup(stage_env):
+    backend, common, tmp_path = stage_env
+    cli.main(["ingest", *common, "--run-id", "base"])
+    cli.main(["cleanup", "base", *common])
+    assert backend.destroyed == ["temp-locomo-base-conv-1"]
+    assert read(tmp_path / "base.ingest.json")["tomes"] == "destroyed"
+    with pytest.raises(SystemExit, match="tomes were destroyed"):
+        cli.main(["retrieve", "base", *common])
+    # With its tomes gone, the run id can be ingested again.
+    cli.main(["ingest", *common, "--run-id", "base"])
+
+
+def test_retrieve_fails_on_another_dataset_or_unknown_samples(stage_env):
+    _, common, tmp_path = stage_env
+    cli.main(["ingest", *common, "--run-id", "base"])
+    with pytest.raises(SystemExit, match="did not ingest: conv-9"):
+        cli.main(["retrieve", "base", *common, "--samples", "conv-9"])
+    (tmp_path / "locomo.json").write_text(json.dumps([RAW_SAMPLE]), encoding="utf-8")
+    with pytest.raises(SystemExit, match="is not the dataset run base ingested"):
+        cli.main(["retrieve", "base", *common])
+
+
+def test_ingest_refuses_a_run_whose_tomes_are_kept(stage_env):
+    _, common, _ = stage_env
+    cli.main(["ingest", *common, "--run-id", "base"])
+    with pytest.raises(SystemExit, match="locomo-eval cleanup base"):
+        cli.main(["ingest", *common, "--run-id", "base"])
+    with pytest.raises(SystemExit, match="locomo-eval cleanup base"):
+        cli.main([*common, "--run-id", "base"])
+
+
+def test_ingest_failure_destroys_the_tomes_it_wrote(client):
+    first = parse_sample(RAW_SAMPLE)
+    second = parse_sample({**RAW_SAMPLE, "sample_id": "conv-2"})
+    remember = client.remember
+
+    async def flaky(content, memory_type, tome, occurred_at, **kw):
+        if tome.endswith("conv-2"):
+            raise RuntimeError("backend down")
+        return await remember(content, memory_type, tome, occurred_at, **kw)
+
+    client.remember = flaky
+    with pytest.raises(RuntimeError):
+        asyncio.run(cli.ingest_samples(client, args(), [first, second], "f1"))
+    assert client.destroyed == ["temp-locomo-f1-conv-1", "temp-locomo-f1-conv-2"]
+
+
+def test_default_command_keep_tomes_reuse_tomes_and_cleanup_flag(stage_env, capsys):
+    backend, common, tmp_path = stage_env
+    cli.main([*common, "--run-id", "base", "--keep-tomes"])
+    assert read(tmp_path / "base.ingest.json")["tomes"] == "kept" and backend.destroyed == []
+    ingested = len(backend.remember_calls)
+
+    cli.main([*common, "--run-id", "vector", "--reuse-tomes", "base", "--ranking", "text_weight=0"])
+    assert len(backend.remember_calls) == ingested
+    vector = read(tmp_path / "vector.json")
+    assert vector["config"]["reused_tomes"] == "base" and vector["config"]["search"]["text_weight"] == 0
+    with pytest.raises(SystemExit, match="ingested turns, not extracted"):
+        cli.main([*common, "--reuse-tomes", "base", "--ingest", "extracted"])
+
+    cli.main([*common, "--cleanup", "base"])
+    assert backend.destroyed == ["temp-locomo-base-conv-1"]
+    assert "--cleanup is deprecated" in capsys.readouterr().err
+    assert read(tmp_path / "base.ingest.json")["tomes"] == "destroyed"
+
+
+def test_reuse_tomes_reads_an_older_keep_tomes_run(stage_env):
+    """A --keep-tomes run from before manifests left <run-id>.keys.json and <run-id>.json."""
+    backend, common, tmp_path = stage_env
+    cli.main([*common, "--run-id", "old", "--keep-tomes"])
+    manifest = read(tmp_path / "old.ingest.json")
+    (tmp_path / "old.keys.json").write_text(json.dumps(manifest["key_maps"]), encoding="utf-8")
+    (tmp_path / "old.ingest.json").unlink()
+
+    cli.main([*common, "--run-id", "again", "--reuse-tomes", "old"])
+    assert read(tmp_path / "again.json")["summary"] == read(tmp_path / "old.json")["summary"]
+    cli.main(["cleanup", "old", *common])
+    assert backend.destroyed == ["temp-locomo-old-conv-1"]
+
+
+def test_retrieve_takes_lifecycle_options_from_the_manifest(stage_env):
+    backend, common, tmp_path = stage_env
+    write_lifecycle_cache(tmp_path / "life.jsonl", hashlib.sha256((tmp_path / "locomo.json").read_bytes()).hexdigest())
+    extract = ["--ingest", "extracted", "--extraction-cache", str(tmp_path / "life.jsonl"), "--extractor-model", EXTRACTOR, "--extract-prompt", LIFECYCLE_VERSION]
+    cli.main(["ingest", *common, "--run-id", "life", *extract, "--superseded", "forget"])
+    manifest = read(tmp_path / "life.ingest.json")
+    assert manifest["ingestion"]["extraction"]["variant"] == "lifecycle"
+    assert manifest["ingestion"]["extraction"]["recall"]["limit"] > 0
+    assert manifest["chunking"]["superseded"] == "forget"
+    # Written after supersession: the forgotten memory is gone from the key map.
+    assert backend.forgotten[0] not in manifest["key_maps"]["conv-1"]
+    assert manifest["memories"]["conv-1"]["entities"] == 2
+
+    cli.main(["retrieve", "life", *common])
+    result = read(tmp_path / "life.json")
+    assert result["config"]["chunking"]["superseded"] == "forget"
+    assert result["memories"]["overall"]["entities_per_conversation"] == 2.0
+    assert cli.ingestion_label(result["config"]) == "extracted: lifecycle, forget"
+    with pytest.raises(SystemExit, match="--superseded forget, not mark"):
+        cli.main([*common, "--reuse-tomes", "life", "--superseded", "mark"])

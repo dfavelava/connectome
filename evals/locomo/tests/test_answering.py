@@ -321,6 +321,19 @@ def retrieval_run(tmp_path, run_id="base"):
     return path
 
 
+def test_cli_answer_scores_a_tagged_retrieval(tmp_path, monkeypatch):
+    base = retrieval_run(tmp_path)
+    tagged = retrieval_run(tmp_path, run_id="base.bm25")
+    monkeypatch.setattr(answering, "LLMClient", lambda **kwargs: FakeLLM(**kwargs))
+    cli.main(["answer", "base", "--tag", "bm25", "--answer-model", "ollama:a", "--judge-model", "ollama:j", "--results-dir", str(tmp_path)])
+
+    assert "answers" in json.loads(tagged.read_text())
+    assert "answers" not in json.loads(base.read_text())
+    # Its checkpoint is its own, and not one of the untagged run's.
+    assert [p.name for p in checkpoint_paths(tmp_path, "base")] == []
+    assert len(checkpoint_paths(tmp_path, "base.bm25")) == 1
+
+
 def test_cli_answer_subcommand_writes_results_next_to_retrieval(tmp_path, monkeypatch, capsys):
     path = retrieval_run(tmp_path)
     clients = []

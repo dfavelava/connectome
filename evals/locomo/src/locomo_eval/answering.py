@@ -449,6 +449,7 @@ def print_judge_sample(questions: list[dict], n: int, rng: random.Random) -> Non
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="locomo-eval answer", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_id", help="the retrieval run to score (results/<run-id>.json)")
+    parser.add_argument("--tag", help="score a tagged retrieval, results/<run-id>.<tag>.json from `locomo-eval retrieve --tag`")
     parser.add_argument("--answer-model", required=True, help="provider:model that answers, e.g. ollama:qwen3:8b")
     parser.add_argument("--judge-model", required=True, help="provider:model that judges; ideally at least as large as the answer model and another family")
     parser.add_argument("--answer-prompt", default=ANSWER_VERSION, help="answer prompt version (default: %(default)s)")
@@ -462,6 +463,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=600.0, help="per-call timeout in seconds (default: %(default)s)")
     parser.add_argument("--judge-sample", type=int, default=0, metavar="N", help="print N random judged items to spot-check the judge")
     args = parser.parse_args(argv)
+    if args.tag:
+        # A tagged retrieval is a run of its own, answer checkpoints included.
+        args.run_id = f"{args.run_id}.{args.tag}"
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     if args.concurrency < 1:
