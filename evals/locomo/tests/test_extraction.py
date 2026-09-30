@@ -13,6 +13,7 @@ from locomo_eval.extraction import (
     EXTRACT,
     EXTRACT_MAX_NUM_PREDICT,
     EXTRACT_OPTIONS,
+    EXTRACT_V2_VERSION,
     EXTRACT_VERSION,
     EXTRACTION_SCHEMA,
     FAILED,
@@ -112,30 +113,35 @@ def test_sessions_of_groups_turns_in_order():
     assert sessions[1].dia_ids == {"D2:1", "D2:2"}
 
 
-def test_extraction_prompt_has_transcript_date_and_entities():
+@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION])
+def test_extraction_prompt_has_transcript_date_and_entities(version):
     session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[1]
-    text = extraction_prompt(load_prompt(EXTRACT_VERSION), session, [Entity("caroline", "Caroline", "person")])
+    text = extraction_prompt(load_prompt(version), session, [Entity("caroline", "Caroline", "person")])
     assert "Session date: 10:00 am on 15 May, 2023" in text
     assert "D2:1 Caroline: I went to the LGBTQ support group yesterday." in text
     assert "caroline | Caroline | person" in text
     assert "$" not in text
-    empty = extraction_prompt(load_prompt(EXTRACT_VERSION), session, [])
+    empty = extraction_prompt(load_prompt(version), session, [])
     assert "(none yet)" in empty
 
 
-def test_extract_prompt_is_committed_and_generic():
-    prompt = load_prompt(EXTRACT_VERSION)
-    assert prompt.sha256 == hashlib.sha256((PROMPTS_DIR / f"{EXTRACT_VERSION}.txt").read_bytes()).hexdigest()
+@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION])
+def test_extract_prompt_is_committed_and_generic(version):
+    prompt = load_prompt(version)
+    assert not extraction.is_lifecycle(prompt)
+    assert prompt.sha256 == hashlib.sha256((PROMPTS_DIR / f"{version}.txt").read_bytes()).hexdigest()
     lowered = prompt.text.lower()
     for name in CATEGORY_NAMES.values():
         assert name not in lowered
     assert "question" not in lowered
 
 
-def test_no_question_text_reaches_any_prompt(tmp_path):
+@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION])
+def test_no_question_text_reaches_any_prompt(tmp_path, version):
     llm = FakeLLM()
     cache = ExtractionCache(tmp_path / "cache.jsonl")
-    tally = run(extract_sample(extractor(llm), cache, DATASET_SHA, SAMPLE.sample_id, SAMPLE.turns))
+    ex = OllamaExtractor(llm, MODEL, load_prompt(version))
+    tally = run(extract_sample(ex, cache, DATASET_SHA, SAMPLE.sample_id, SAMPLE.turns))
     assert tally.extracted == 2
     prompts = [c["system"] + "\n" + c["user"] for c in llm.calls]
     assert prompts
