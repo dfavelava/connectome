@@ -6,10 +6,14 @@ Each conversation is ingested into its own scratch tome
 --ingest extracted. Every QA item with evidence is then sent to recall, the
 returned memory keys are mapped back to their source dialog ids, and evidence
 coverage, recall@k / hit@k and recall at equal token budgets are computed per
-category. The tome is destroyed as soon as its conversation is scored,
+category. The tomes are destroyed once every conversation is scored,
 including on failure.
 
-`locomo-eval answer <run-id> ...` then scores a finished run's answers
+The default command runs three stages in one go, which can also run apart:
+`locomo-eval ingest` fills the tomes and writes results/<run-id>.ingest.json,
+`locomo-eval retrieve <run-id>` scores them (as often as you like, with
+--tag), and `locomo-eval cleanup <run-id>` destroys them; see each one's
+--help. `locomo-eval answer <run-id> ...` then scores a finished run's answers
 offline; see `locomo-eval answer --help`. `locomo-eval extract ...` has a
 local LLM choose the memories to store instead; see `locomo-eval extract --help`.
 `locomo-eval judge-agreement <run-id> ...` checks the judges that scored a run
@@ -20,6 +24,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -62,6 +67,13 @@ FORGET = "forget"
 MAX_SEARCH_K = 50
 MEMORY_TEMPLATE = "[{session_date}] {speaker}: {text}"
 SOURCE_TYPE = "locomo-eval"
+# Whether an ingest manifest's tomes still exist.
+KEPT = "kept"
+DESTROYED = "destroyed"
+# A --tag names results/<run-id>.<tag>.json, so it can't clash with the other
+# files a run writes (the manifest, answer checkpoints).
+TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+RESERVED_TAGS = {"ingest", "keys"}
 
 
 def memory_text(turn: Turn) -> str:
@@ -233,55 +245,82 @@ async def destroy(client: ConnectomeClient, tome: str) -> None:
         print(f"warning: failed to destroy tome {tome}: {exc}", file=sys.stderr)
 
 
-async def run(
+async def ingest_samples(
     client: ConnectomeClient,
     args: argparse.Namespace,
     samples: list[Sample],
     run_id: str,
-    key_maps: dict[str, KeyMap] | None = None,
     extracted: CachedRun | None = None,
-    echoed: list[dict[str, object]] | None = None,
-) -> tuple[list[QuestionResult], dict[str, int], dict[str, KeyMap]]:
-    """Ingest, score, and destroy each sample's tome, returning the results,
-    skip counts, and each sample's key map.
+) -> dict[str, KeyMap]:
+    """Ingest each sample into its own tome and return each sample's key map.
 
     With extracted, the cached extraction's memories are ingested instead of
-    the turns. Given key_maps (from an earlier --keep-tomes run named
-    run_id), ingestion is skipped and that run's tomes are queried and left
-    in place instead.
+    the turns. If ingestion fails, the tomes written so far are destroyed,
+    since no manifest will point at them."""
+    key_maps: dict[str, KeyMap] = {}
+    written: list[str] = []
+    try:
+        for sample in samples:
+            tome = tome_for(run_id, sample.sample_id)
+            written.append(tome)
+            started = time.monotonic()
+            if extracted is not None:
+                memories = extracted.memories(sample.sample_id)
+                key_map = await ingest_extracted(client, memories, tome, args.concurrency, not args.no_occurred_at, args.superseded)
+            else:
+                key_map = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
+            key_maps[sample.sample_id] = key_map
+            print(f"{sample.sample_id}: {len(key_map)} memories ingested in {time.monotonic() - started:.1f}s", file=sys.stderr)
+    except BaseException:
+        for tome in written:
+            await destroy(client, tome)
+        raise
+    return key_maps
+
+
+async def retrieve_samples(
+    client: ConnectomeClient,
+    args: argparse.Namespace,
+    samples: list[Sample],
+    run_id: str,
+    key_maps: dict[str, KeyMap],
+    echoed: list[dict[str, object]] | None = None,
+) -> tuple[list[QuestionResult], dict[str, int]]:
+    """Query the tomes run_id ingested and return the results and skip
+    counts. Nothing is written or destroyed.
 
     Each search response's echoed ranking settings are appended to echoed.
     """
     k = recall_k(args)
-    reuse = key_maps is not None
-    key_maps = dict(key_maps or {})
     results: list[QuestionResult] = []
     skipped: dict[str, int] = {}
     for sample in samples:
-        tome = tome_for(run_id, sample.sample_id)
         started = time.monotonic()
-        try:
-            if reuse:
-                key_map = key_maps[sample.sample_id]
-            elif extracted is not None:
-                memories = extracted.memories(sample.sample_id)
-                key_map = key_maps[sample.sample_id] = await ingest_extracted(client, memories, tome, args.concurrency, not args.no_occurred_at, args.superseded)
-            else:
-                key_map = key_maps[sample.sample_id] = await ingest(client, sample, tome, args.concurrency, not args.no_occurred_at)
-            ingested = time.monotonic()
-            sample_results, sample_skipped = await query(client, sample, tome, key_map, k, args.concurrency, getattr(args, "ranking", None), echoed)
-        finally:
-            if not args.keep_tomes and not reuse:
-                await destroy(client, tome)
+        tome = tome_for(run_id, sample.sample_id)
+        sample_results, sample_skipped = await query(client, sample, tome, key_maps[sample.sample_id], k, args.concurrency, getattr(args, "ranking", None), echoed)
         results.extend(sample_results)
         for reason, count in sample_skipped.items():
             skipped[reason] = skipped.get(reason, 0) + count
-        print(
-            f"{sample.sample_id}: {len(key_map)} memories {'reused' if reuse else f'ingested in {ingested - started:.1f}s'}, "
-            f"{len(sample_results)} questions scored in {time.monotonic() - ingested:.1f}s",
-            file=sys.stderr,
-        )
-    return results, skipped, key_maps
+        print(f"{sample.sample_id}: {len(sample_results)} questions scored in {time.monotonic() - started:.1f}s", file=sys.stderr)
+    return results, skipped
+
+
+async def missing_tomes(client: ConnectomeClient, run_id: str, key_maps: dict[str, KeyMap]) -> list[str]:
+    """The tomes of run_id that no longer hold their first ingested memory.
+    A search of a missing tome just comes back empty, so without this
+    check a destroyed tome would score as zero recall."""
+    missing = []
+    for sample_id, key_map in key_maps.items():
+        if not key_map:
+            continue
+        tome = tome_for(run_id, sample_id)
+        try:
+            _ = await client.get_memory(next(iter(key_map)), tome=tome)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            missing.append(tome)
+    return missing
 
 
 def search_config(echoed: list[dict[str, object]]) -> dict[str, object] | None:
@@ -297,13 +336,16 @@ def search_config(echoed: list[dict[str, object]]) -> dict[str, object] | None:
     return echoed[0]
 
 
-def memory_stats(key_maps: dict[str, KeyMap], extracted: CachedRun | None = None) -> dict[str, dict[str, float | int]]:
+def memory_stats(key_maps: dict[str, KeyMap], entities: dict[str, int] | None = None) -> dict[str, dict[str, float | int]]:
     """Per sample and overall: memories, mean sources per memory, and
     entities (0 for raw turns, which carry none)."""
     stats: dict[str, dict[str, float | int]] = {}
     for sample_id, key_map in key_maps.items():
-        entities = len(extracted.entity_ids(sample_id)) if extracted else 0
-        stats[sample_id] = {"memories": len(key_map), "sources_per_memory": _ratio(sum(map(len, key_map.values())), len(key_map)), "entities": entities}
+        stats[sample_id] = {
+            "memories": len(key_map),
+            "sources_per_memory": _ratio(sum(map(len, key_map.values())), len(key_map)),
+            "entities": (entities or {}).get(sample_id, 0),
+        }
     memories = sum(int(s["memories"]) for s in stats.values())
     sources = sum(len(v) for key_map in key_maps.values() for v in key_map.values())
     stats["overall"] = {
@@ -319,37 +361,122 @@ def dump_key_maps(key_maps: dict[str, KeyMap]) -> dict[str, dict[str, list[str]]
 
 
 def load_key_maps(raw: dict[str, dict[str, str | list[str]]]) -> dict[str, KeyMap]:
-    """Key maps as a --keep-tomes run wrote them. Maps from before extracted
-    ingestion hold one dialog id per key rather than a list."""
+    """Key maps as an ingest manifest (or an older --keep-tomes run's
+    keys.json) holds them. Maps from before extracted ingestion hold one
+    dialog id per key rather than a list."""
     return {
         sample_id: {key: (sources,) if isinstance(sources, str) else tuple(sources) for key, sources in key_map.items()}
         for sample_id, key_map in raw.items()
     }
 
 
-async def cleanup(client: ConnectomeClient, samples: list[Sample], run_id: str) -> None:
-    for sample in samples:
-        tome = tome_for(run_id, sample.sample_id)
+async def cleanup(client: ConnectomeClient, sample_ids: Sequence[str], run_id: str) -> None:
+    for sample_id in sample_ids:
+        tome = tome_for(run_id, sample_id)
         await destroy(client, tome)
         print(f"destroyed {tome}", file=sys.stderr)
 
 
-def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list[Sample], run_id: str, extracted: CachedRun | None = None) -> dict[str, object]:
+def chunking_config(args: argparse.Namespace, extracted: CachedRun | None) -> dict[str, object]:
     if extracted is None:
-        chunking = {"unit": "one memory per dialog turn", "template": MEMORY_TEMPLATE, "occurred_at": "session date" if not args.no_occurred_at else None}
-    else:
-        chunking = {
-            "unit": "one memory per extracted memory",
-            "template": None,
-            "occurred_at": "extracted" if not args.no_occurred_at else None,
-            "superseded": args.superseded if extracted.config.get("variant") == extraction.LIFECYCLE else None,
-        }
+        return {"unit": "one memory per dialog turn", "template": MEMORY_TEMPLATE, "occurred_at": "session date" if not args.no_occurred_at else None}
+    return {
+        "unit": "one memory per extracted memory",
+        "template": None,
+        "occurred_at": "extracted" if not args.no_occurred_at else None,
+        "superseded": args.superseded if extracted.config.get("variant") == extraction.LIFECYCLE else None,
+    }
+
+
+def ingest_manifest(
+    client: ConnectomeClient,
+    args: argparse.Namespace,
+    samples: list[Sample],
+    run_id: str,
+    key_maps: dict[str, KeyMap],
+    extracted: CachedRun | None = None,
+) -> dict[str, object]:
+    """What `retrieve` needs to score an ingest's tomes: the key maps
+    (written after supersession, so forgotten memories are gone) and how
+    the tomes were filled, which retrieval results copy into their config."""
+    entities = {s.sample_id: len(extracted.entity_ids(s.sample_id)) for s in samples} if extracted else None
     return {
         "run_id": run_id,
-        "started_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit(),
         "base_url": client.base_url,
         "dataset": {"path": str(args.data), "sha256": _sha256(args.data)},
+        "samples": [s.sample_id for s in samples],
+        "embedding_model": args.embedding_model,
+        "ingestion": {"mode": args.ingest, "extraction": extracted.config if extracted else None},
+        "chunking": chunking_config(args, extracted),
+        "concurrency": args.concurrency,
+        "tomes": KEPT,
+        "memories": memory_stats(key_maps, entities),
+        "key_maps": dump_key_maps(key_maps),
+    }
+
+
+def manifest_path(results_dir: Path, run_id: str) -> Path:
+    return results_dir / f"{run_id}.ingest.json"
+
+
+def write_manifest(results_dir: Path, manifest: dict[str, object]) -> Path:
+    results_dir.mkdir(parents=True, exist_ok=True)
+    path = manifest_path(results_dir, str(manifest["run_id"]))
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    return path
+
+
+def read_manifest(results_dir: Path, run_id: str) -> dict | None:
+    """run_id's ingest manifest, or one rebuilt from an older --keep-tomes
+    run's <run-id>.keys.json and results; None when there is neither."""
+    path = manifest_path(results_dir, run_id)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    keys_path, run_path = results_dir / f"{run_id}.keys.json", results_dir / f"{run_id}.json"
+    if not (keys_path.exists() and run_path.exists()):
+        return None
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    config = run["config"]
+    key_maps = load_key_maps(json.loads(keys_path.read_text(encoding="utf-8")))
+    entities = {sample_id: int(row.get("entities", 0)) for sample_id, row in (run.get("memories") or {}).items() if sample_id != "overall"}
+    return {
+        "run_id": run_id,
+        "created_at": config.get("started_at"),
+        "git_commit": config.get("git_commit"),
+        "base_url": config.get("base_url"),
+        "dataset": config["dataset"],
+        "samples": list(key_maps),
+        "embedding_model": config.get("embedding_model"),
+        "ingestion": config.get("ingestion") or {"mode": TURNS, "extraction": None},
+        "chunking": config.get("chunking"),
+        "concurrency": config.get("concurrency"),
+        "tomes": KEPT,
+        "memories": memory_stats(key_maps, entities),
+        "key_maps": dump_key_maps(key_maps),
+    }
+
+
+def run_config(
+    client: ConnectomeClient,
+    args: argparse.Namespace,
+    manifest: dict,
+    samples: list[Sample],
+    run_id: str,
+    started_at: str,
+    reused_tomes: str | None = None,
+) -> dict[str, object]:
+    """A retrieval result's config. How the tomes were filled comes from
+    the ingest manifest; reused_tomes names the ingest run when this process
+    didn't do the ingesting."""
+    return {
+        "run_id": run_id,
+        "started_at": started_at,
+        "git_commit": _git_commit(),
+        "base_url": client.base_url,
+        "dataset": manifest["dataset"],
         "samples": [s.sample_id for s in samples],
         "ks": args.ks,
         "budgets": args.budgets,
@@ -359,10 +486,10 @@ def run_config(client: ConnectomeClient, args: argparse.Namespace, samples: list
         # Filled in from the ranking the backend echoes on its search
         # responses (see search_config), not from this process's environment.
         "search": None,
-        "reused_tomes": args.reuse_tomes,
-        "embedding_model": args.embedding_model,
-        "ingestion": {"mode": args.ingest, "extraction": extracted.config if extracted else None},
-        "chunking": chunking,
+        "reused_tomes": reused_tomes,
+        "embedding_model": manifest["embedding_model"],
+        "ingestion": manifest["ingestion"],
+        "chunking": manifest["chunking"],
         "concurrency": args.concurrency,
     }
 
@@ -410,11 +537,39 @@ def print_memory_stats(stats: dict[str, dict[str, float | int]], label: str = ""
         print(f"{name}: {row['memories']} memories, {row['sources_per_memory']:.2f} sources/memory, {row['entities_per_conversation']:.1f} entities/conversation")
 
 
-def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="locomo-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH, help="path to locomo10.json (default: %(default)s)")
-    parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where to write <run-id>.json (default: %(default)s)")
-    parser.add_argument("--run-id", help="tome/result name suffix (default: a UTC timestamp)")
+    parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where a run's files live (default: %(default)s)")
+    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids (default: all)")
+    parser.add_argument("--timeout", type=float, default=60.0, help="per-request timeout in seconds (default: %(default)s)")
+
+
+def _ingest_args(parser: argparse.ArgumentParser) -> None:
+    # --ingest and --superseded default to None so that --reuse-tomes can
+    # tell whether they were given; _ingest_defaults fills them in.
+    parser.add_argument(
+        "--ingest",
+        choices=[TURNS, EXTRACTED],
+        help=f"ingest one memory per turn, or the memories a cached `locomo-eval extract` run chose (default: {TURNS})",
+    )
+    parser.add_argument("--extraction-cache", type=Path, default=DEFAULT_CACHE_PATH, help="--ingest extracted: the extract stage's cache (default: %(default)s)")
+    parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="--ingest extracted: whose extraction to ingest (default: %(default)s)")
+    parser.add_argument("--extract-prompt", default=EXTRACT_VERSION, help="--ingest extracted: the extraction prompt version (default: %(default)s)")
+    parser.add_argument(
+        "--superseded",
+        choices=[MARK, FORGET],
+        help=f"--ingest extracted with a lifecycle extraction: mark superseded memories' relationships superseded_by their successor, or forget them (default: {MARK})",
+    )
+    parser.add_argument("--embedding-model", default="nomic-embed-text", help="recorded in the run config only (default: %(default)s)")
+    parser.add_argument("--no-occurred-at", action="store_true", help="don't set occurred_at; the session date stays in the memory text")
+
+
+def _ingest_defaults(args: argparse.Namespace) -> None:
+    args.ingest = args.ingest or TURNS
+    args.superseded = args.superseded or MARK
+
+
+def _retrieve_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ks", type=_ks, default=DEFAULT_KS, help="comma-separated k values (default: 1,5,10)")
     parser.add_argument(
         "--budgets",
@@ -423,28 +578,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="comma-separated token budgets for equal-budget recall; 0 for none (default: 64,128,256)",
     )
     parser.add_argument(
-        "--ingest",
-        choices=[TURNS, EXTRACTED],
-        default=TURNS,
-        help="ingest one memory per turn, or the memories a cached `locomo-eval extract` run chose (default: %(default)s)",
-    )
-    parser.add_argument("--extraction-cache", type=Path, default=DEFAULT_CACHE_PATH, help="--ingest extracted: the extract stage's cache (default: %(default)s)")
-    parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="--ingest extracted: whose extraction to ingest (default: %(default)s)")
-    parser.add_argument("--extract-prompt", default=EXTRACT_VERSION, help="--ingest extracted: the extraction prompt version (default: %(default)s)")
-    parser.add_argument(
-        "--superseded",
-        choices=[MARK, FORGET],
-        default=MARK,
-        help="--ingest extracted with a lifecycle extraction: mark superseded memories' relationships superseded_by their successor, or forget them (default: %(default)s)",
-    )
-    parser.add_argument("--compare", metavar="RUN_ID", help="print a finished run's metrics (e.g. a turns run) under this run's, row by row")
-    parser.add_argument(
         "--answer-k",
         type=int,
         default=DEFAULT_ANSWER_K,
         help="retrieved turns an answer stage will use; recall fetches max(ks + [answer-k]) (default: %(default)s)",
     )
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to run (default: all)")
     parser.add_argument(
         "--ranking",
         action="append",
@@ -453,22 +591,72 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="JSON|KEY=VALUE",
         help=f"search ranking overrides sent with every query, as a JSON object or repeatable key=value; keys: {', '.join(RANKING_KEYS)} (default: the backend's)",
     )
-    parser.add_argument("--concurrency", type=int, default=8, help="max in-flight requests (default: %(default)s)")
-    parser.add_argument("--timeout", type=float, default=60.0, help="per-request timeout in seconds (default: %(default)s)")
-    parser.add_argument("--embedding-model", default="nomic-embed-text", help="recorded in the run config only (default: %(default)s)")
-    parser.add_argument("--no-occurred-at", action="store_true", help="don't set occurred_at; the session date stays in the memory text")
-    parser.add_argument("--keep-tomes", action="store_true", help="don't destroy tomes afterwards (for debugging; clean up with --cleanup)")
-    parser.add_argument(
-        "--reuse-tomes",
-        metavar="RUN_ID",
-        help="query the tomes an earlier --keep-tomes run left behind instead of ingesting (for comparing backend search settings on one index)",
-    )
-    parser.add_argument("--cleanup", metavar="RUN_ID", help="destroy the tomes left behind by RUN_ID and exit")
-    args = parser.parse_args(argv)
+    parser.add_argument("--compare", metavar="RUN_ID", help="print a finished run's metrics (results/RUN_ID.json, e.g. a turns run) under this run's, row by row")
+
+
+def _check_retrieve_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     args.ranking = {k: v for override in args.ranking for k, v in override.items()}
     if not 1 <= args.answer_k <= MAX_SEARCH_K:
         parser.error(f"--answer-k must be between 1 and {MAX_SEARCH_K}")
+
+
+def _concurrency_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--concurrency", type=int, default=8, help="max in-flight requests (default: %(default)s)")
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="locomo-eval", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    _common_args(parser)
+    parser.add_argument("--run-id", help="tome/result name suffix (default: a UTC timestamp)")
+    _ingest_args(parser)
+    _retrieve_args(parser)
+    _concurrency_arg(parser)
+    parser.add_argument("--keep-tomes", action="store_true", help="skip cleanup: leave the tomes for `locomo-eval retrieve` (destroy them with `locomo-eval cleanup`)")
+    parser.add_argument("--reuse-tomes", metavar="RUN_ID", help="same as `locomo-eval retrieve RUN_ID`, but writing results/<run-id>.json")
+    parser.add_argument("--cleanup", metavar="RUN_ID", help="deprecated: use `locomo-eval cleanup RUN_ID`")
+    args = parser.parse_args(argv)
+    _check_retrieve_args(parser, args)
+    if not args.reuse_tomes:
+        _ingest_defaults(args)
     return args
+
+
+def parse_ingest_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="locomo-eval ingest",
+        description="Ingest each conversation into its own tome, temp-locomo-<run-id>-<sample-id>, and leave the tomes in place. "
+        "Writes results/<run-id>.ingest.json, which `locomo-eval retrieve <run-id>` scores the tomes from.",
+    )
+    _common_args(parser)
+    parser.add_argument("--run-id", help="tome/manifest name suffix (default: a UTC timestamp)")
+    _ingest_args(parser)
+    _concurrency_arg(parser)
+    args = parser.parse_args(argv)
+    _ingest_defaults(args)
+    return args
+
+
+def parse_retrieve_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="locomo-eval retrieve",
+        description="Score the tomes `locomo-eval ingest` left behind, without ingesting anything. "
+        "Writes results/<run-id>.json, or results/<run-id>.<tag>.json with --tag.",
+    )
+    parser.add_argument("run_id", help="the ingest run to score (results/<run-id>.ingest.json)")
+    parser.add_argument("--tag", type=_tag, help="write results/<run-id>.<tag>.json, so several retrieval configs can share one ingest")
+    _common_args(parser)
+    _retrieve_args(parser)
+    _concurrency_arg(parser)
+    args = parser.parse_args(argv)
+    _check_retrieve_args(parser, args)
+    return args
+
+
+def parse_cleanup_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="locomo-eval cleanup", description="Destroy the tomes a run left behind.")
+    parser.add_argument("run_id", help="the run whose tomes to destroy")
+    _common_args(parser)
+    return parser.parse_args(argv)
 
 
 def load_cached_run(args: argparse.Namespace, samples: list[Sample]) -> CachedRun:
@@ -497,73 +685,73 @@ def load_cached_run(args: argparse.Namespace, samples: list[Sample]) -> CachedRu
     return extracted
 
 
-def main(argv: list[str] | None = None) -> None:
-    load_dotenv()
-    argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["answer"]:
-        answering.main(argv[1:])
-        return
-    if argv[:1] == ["extract"]:
-        extraction.main(argv[1:])
-        return
-    if argv[:1] == ["judge-agreement"]:
-        judge_labels.main(argv[1:])
-        return
-    args = parse_args(argv)
+def load_samples(args: argparse.Namespace, wanted: Sequence[str] | None = None) -> list[Sample]:
+    """The dataset's samples, only those in wanted (default: --samples) if given."""
     if not args.data.exists():
         sys.exit(f"dataset not found at {args.data}; see evals/locomo/README.md for the download")
-
     samples = load_dataset(args.data)
-    if args.samples:
-        wanted = set(args.samples)
-        samples = [s for s in samples if s.sample_id in wanted]
-        if missing := wanted - {s.sample_id for s in samples}:
+    wanted = args.samples if wanted is None else wanted
+    if wanted:
+        samples = [s for s in samples if s.sample_id in set(wanted)]
+        if missing := set(wanted) - {s.sample_id for s in samples}:
             sys.exit(f"unknown sample ids: {', '.join(sorted(missing))}")
+    return samples
 
-    client = ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout)
-    if args.cleanup:
-        asyncio.run(cleanup(client, samples, args.cleanup))
-        return
 
-    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dt%H%M%Sz")
-    baseline = None
-    if args.compare:
-        compare_path = args.results_dir / f"{args.compare}.json"
-        if not compare_path.exists():
-            sys.exit(f"no results at {compare_path} to --compare against")
-        baseline = json.loads(compare_path.read_text(encoding="utf-8"))
+def load_baseline(args: argparse.Namespace) -> dict | None:
+    if not args.compare:
+        return None
+    compare_path = args.results_dir / f"{args.compare}.json"
+    if not compare_path.exists():
+        sys.exit(f"no results at {compare_path} to --compare against")
+    return json.loads(compare_path.read_text(encoding="utf-8"))
+
+
+def refuse_kept_tomes(results_dir: Path, run_id: str) -> None:
+    """Ingesting into tomes that still hold an earlier ingest would mix the two."""
+    path = manifest_path(results_dir, run_id)
+    if path.exists() and json.loads(path.read_text(encoding="utf-8")).get("tomes") == KEPT:
+        sys.exit(f"run {run_id} still has tomes from an earlier ingest; destroy them with `locomo-eval cleanup {run_id}` or pick another --run-id")
+
+
+def ingest_stage(client: ConnectomeClient, args: argparse.Namespace, samples: list[Sample], run_id: str) -> dict:
+    """Ingest samples into run_id's tomes and write the manifest."""
+    refuse_kept_tomes(args.results_dir, run_id)
     extracted = load_cached_run(args, samples) if args.ingest == EXTRACTED else None
-    config = run_config(client, args, samples, run_id, extracted)
-    tome_run_id, key_maps = run_id, None
-    echoed: list[dict[str, object]] = []
-    if args.reuse_tomes:
-        tome_run_id = args.reuse_tomes
-        key_maps_path = args.results_dir / f"{tome_run_id}.keys.json"
-        if not key_maps_path.exists():
-            sys.exit(f"no key map at {key_maps_path}; --reuse-tomes needs a run made with --keep-tomes")
-        kept_path = args.results_dir / f"{tome_run_id}.json"
-        if kept_path.exists():
-            kept_mode = (json.loads(kept_path.read_text(encoding="utf-8"))["config"].get("ingestion") or {}).get("mode", TURNS)
-            if kept_mode != args.ingest:
-                sys.exit(f"run {tome_run_id} ingested {kept_mode}, not {args.ingest}; pass --ingest {kept_mode}")
-        key_maps = load_key_maps(json.loads(key_maps_path.read_text(encoding="utf-8")))
-        if missing := [s.sample_id for s in samples if s.sample_id not in key_maps]:
-            sys.exit(f"run {tome_run_id} did not ingest: {', '.join(missing)}")
     try:
-        results, skipped, key_maps = asyncio.run(run(client, args, samples, tome_run_id, key_maps, extracted, echoed))
+        key_maps = asyncio.run(ingest_samples(client, args, samples, run_id, extracted))
+    except httpx.HTTPError as exc:
+        sys.exit(f"request to {client.base_url} failed: {exc!r}")
+    manifest = ingest_manifest(client, args, samples, run_id, key_maps, extracted)
+    write_manifest(args.results_dir, manifest)
+    return manifest
+
+
+def retrieve_stage(
+    client: ConnectomeClient,
+    args: argparse.Namespace,
+    manifest: dict,
+    samples: list[Sample],
+    name: str,
+    started_at: str,
+    reused_tomes: str | None,
+    baseline: dict | None,
+) -> None:
+    """Score the manifest's tomes and write results/<name>.json."""
+    key_maps = load_key_maps(manifest["key_maps"])
+    config = run_config(client, args, manifest, samples, name, started_at, reused_tomes)
+    echoed: list[dict[str, object]] = []
+    try:
+        results, skipped = asyncio.run(retrieve_samples(client, args, samples, manifest["run_id"], key_maps, echoed))
     except httpx.HTTPError as exc:
         sys.exit(f"request to {config['base_url']} failed: {exc!r}")
     config["search"] = search_config(echoed)
     summary = summarize(results, args.ks, args.budgets)
-    stats = memory_stats({s.sample_id: key_maps[s.sample_id] for s in samples}, extracted)
+    entities = {sample_id: int(row["entities"]) for sample_id, row in manifest["memories"].items() if sample_id != "overall"}
+    stats = memory_stats({s.sample_id: key_maps[s.sample_id] for s in samples}, entities)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)
-    if args.keep_tomes and not args.reuse_tomes:
-        # Memory keys are random, so a later --reuse-tomes run needs this map
-        # to score the kept tomes.
-        with (args.results_dir / f"{run_id}.keys.json").open("w", encoding="utf-8") as f:
-            json.dump(dump_key_maps(key_maps), f, indent=2)
-    out_path = args.results_dir / f"{run_id}.json"
+    out_path = args.results_dir / f"{name}.json"
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(
             {"config": config, "summary": summary, "memories": stats, "skipped": skipped, "questions": [asdict(r) for r in results]},
@@ -571,7 +759,7 @@ def main(argv: list[str] | None = None) -> None:
             indent=2,
         )
 
-    label = f"{run_id} ({ingestion_label(config)})"
+    label = f"{name} ({ingestion_label(config)})"
     if baseline is None:
         print_summary(summary, args.ks, args.budgets)
         print_memory_stats(stats, label)
@@ -580,6 +768,119 @@ def main(argv: list[str] | None = None) -> None:
         print_summary(summary, args.ks, args.budgets, label, rescore(baseline, args.ks, args.budgets), baseline_label)
         print_memory_stats(stats, label, baseline.get("memories"), baseline_label)
     print(f"\nskipped: {skipped}\nwrote {out_path}")
+
+
+def cleanup_stage(client: ConnectomeClient, args: argparse.Namespace, run_id: str) -> None:
+    """Destroy run_id's tomes: those its manifest lists, or with no
+    manifest, one per dataset sample. A manifest whose tomes are all gone
+    is marked so, and retrieve then refuses it."""
+    manifest = read_manifest(args.results_dir, run_id)
+    if manifest is None:
+        sample_ids = [s.sample_id for s in load_samples(args)]
+    else:
+        if args.samples and (missing := set(args.samples) - set(manifest["samples"])):
+            sys.exit(f"run {run_id} did not ingest: {', '.join(sorted(missing))}")
+        sample_ids = [s for s in manifest["samples"] if not args.samples or s in args.samples]
+    asyncio.run(cleanup(client, sample_ids, run_id))
+    if manifest is not None and manifest_path(args.results_dir, run_id).exists() and set(sample_ids) == set(manifest["samples"]):
+        manifest["tomes"] = DESTROYED
+        write_manifest(args.results_dir, manifest)
+
+
+def retrieve_existing(args: argparse.Namespace, ingest_run_id: str, name: str, ingest_mode: str | None = None, superseded: str | None = None) -> None:
+    """Score the tomes ingest_run_id left behind into results/<name>.json.
+    How they were ingested comes from the manifest; ingest_mode and
+    superseded, when given, must agree with it."""
+    manifest = read_manifest(args.results_dir, ingest_run_id)
+    if manifest is None:
+        sys.exit(f"no ingest manifest at {manifest_path(args.results_dir, ingest_run_id)}; run `locomo-eval ingest --run-id {ingest_run_id}` first")
+    if manifest.get("tomes") != KEPT:
+        sys.exit(f"run {ingest_run_id}'s tomes were destroyed; ingest again with `locomo-eval ingest --run-id {ingest_run_id}`")
+    kept_mode = (manifest.get("ingestion") or {}).get("mode", TURNS)
+    if ingest_mode and ingest_mode != kept_mode:
+        sys.exit(f"run {ingest_run_id} ingested {kept_mode}, not {ingest_mode}; pass --ingest {kept_mode}")
+    kept_superseded = (manifest.get("chunking") or {}).get("superseded")
+    if superseded and kept_superseded and superseded != kept_superseded:
+        sys.exit(f"run {ingest_run_id} ingested with --superseded {kept_superseded}, not {superseded}")
+    if args.samples and (missing := [s for s in args.samples if s not in manifest["samples"]]):
+        sys.exit(f"run {ingest_run_id} did not ingest: {', '.join(missing)}")
+    samples = load_samples(args, args.samples or manifest["samples"])
+    if _sha256(args.data) != manifest["dataset"]["sha256"]:
+        sys.exit(f"{args.data} is not the dataset run {ingest_run_id} ingested ({manifest['dataset']['path']}); pass --data")
+    baseline = load_baseline(args)
+
+    client = ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout)
+    key_maps = load_key_maps(manifest["key_maps"])
+    try:
+        missing_tome_ids = asyncio.run(missing_tomes(client, ingest_run_id, {s.sample_id: key_maps[s.sample_id] for s in samples}))
+    except httpx.HTTPError as exc:
+        sys.exit(f"request to {client.base_url} failed: {exc!r}")
+    if missing_tome_ids:
+        sys.exit(f"tomes missing from {client.base_url}: {', '.join(missing_tome_ids)}; ingest again with `locomo-eval ingest --run-id {ingest_run_id}`")
+    started_at = datetime.now(UTC).isoformat()
+    retrieve_stage(client, args, manifest, samples, name, started_at, ingest_run_id, baseline)
+
+
+def ingest_main(argv: list[str]) -> None:
+    args = parse_ingest_args(argv)
+    samples = load_samples(args)
+    run_id = args.run_id or _timestamp()
+    client = ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout)
+    manifest = ingest_stage(client, args, samples, run_id)
+    print_memory_stats(manifest["memories"], f"{run_id} ({ingestion_label(manifest)})")
+    print(f"\nwrote {manifest_path(args.results_dir, run_id)}")
+    print(f"score it with `locomo-eval retrieve {run_id}`; destroy its tomes with `locomo-eval cleanup {run_id}`")
+
+
+def retrieve_main(argv: list[str]) -> None:
+    args = parse_retrieve_args(argv)
+    retrieve_existing(args, args.run_id, f"{args.run_id}.{args.tag}" if args.tag else args.run_id)
+
+
+def cleanup_main(argv: list[str]) -> None:
+    args = parse_cleanup_args(argv)
+    cleanup_stage(ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout), args, args.run_id)
+
+
+def run_all(args: argparse.Namespace) -> None:
+    """ingest, then retrieve, then (unless --keep-tomes) cleanup."""
+    samples = load_samples(args)
+    run_id = args.run_id or _timestamp()
+    baseline = load_baseline(args)
+    client = ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout)
+    started_at = datetime.now(UTC).isoformat()
+    manifest = ingest_stage(client, args, samples, run_id)
+    try:
+        retrieve_stage(client, args, manifest, samples, run_id, started_at, None, baseline)
+    finally:
+        if not args.keep_tomes:
+            cleanup_stage(client, args, run_id)
+
+
+SUBCOMMANDS = {
+    "ingest": ingest_main,
+    "retrieve": retrieve_main,
+    "cleanup": cleanup_main,
+    "answer": answering.main,
+    "extract": extraction.main,
+    "judge-agreement": judge_labels.main,
+}
+
+
+def main(argv: list[str] | None = None) -> None:
+    load_dotenv()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in SUBCOMMANDS:
+        SUBCOMMANDS[argv[0]](argv[1:])
+        return
+    args = parse_args(argv)
+    if args.cleanup:
+        print(f"warning: --cleanup is deprecated; use `locomo-eval cleanup {args.cleanup}`", file=sys.stderr)
+        cleanup_stage(ConnectomeClient(source_type=SOURCE_TYPE, timeout=args.timeout), args, args.cleanup)
+    elif args.reuse_tomes:
+        retrieve_existing(args, args.reuse_tomes, args.run_id or _timestamp(), args.ingest, args.superseded)
+    else:
+        run_all(args)
 
 
 def ingestion_label(config: dict) -> str:
@@ -630,6 +931,16 @@ def _budgets(value: str) -> list[int]:
     if budgets and budgets[0] < 1:
         raise argparse.ArgumentTypeError("budgets must be positive token counts")
     return budgets
+
+
+def _tag(value: str) -> str:
+    if not TAG_PATTERN.fullmatch(value) or value in RESERVED_TAGS:
+        raise argparse.ArgumentTypeError(f"a tag is letters, digits, '-' and '_', and not {' or '.join(sorted(RESERVED_TAGS))}")
+    return value
+
+
+def _timestamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%dt%H%M%Sz")
 
 
 def _ratio(numerator: float, denominator: float) -> float:

@@ -17,7 +17,10 @@ For each of the dataset's conversations:
 2. Sends each QA question to `recall` with `k = max(--ks + [--answer-k])` and
    `hydrate: true`, and maps the returned memory keys back to dialog ids
    (memory keys are random UUIDs).
-3. Destroys the tome - also when the run fails or is interrupted.
+3. Destroys the tomes - also when the run fails or is interrupted.
+
+These are the `ingest`, `retrieve` and `cleanup` [stages](#stages), which the
+default command runs back to back and which can also run one at a time.
 
 It then reports, overall and per category (single-hop, multi-hop, temporal,
 open-domain, adversarial):
@@ -78,10 +81,9 @@ Useful flags (`uv run locomo-eval --help` for all):
 - `--run-id NAME` - fixed tome/result name instead of a timestamp.
 - `--no-occurred-at` - leave `occurred_at` unset; the date stays in the text.
 - `--concurrency N` - in-flight requests during ingestion and querying.
-- `--keep-tomes` - leave the tomes in place and write
-  `results/<run-id>.keys.json` (the memory key -> source dialog ids map).
-- `--reuse-tomes RUN_ID` - skip ingestion and query the tomes a `--keep-tomes`
-  run left behind (see below).
+- `--keep-tomes` - skip cleanup, leaving the tomes for `locomo-eval retrieve`.
+- `--reuse-tomes RUN_ID` - the same as `locomo-eval retrieve RUN_ID`, but
+  writing `results/<run-id>.json` (see [Stages](#stages)).
 
 Ingestion embeds each turn, so a full run (~5,900 turns, ~1,980 scored
 questions) takes a while on CPU-only Ollama; `--samples` is the quick loop.
@@ -104,26 +106,79 @@ environment. A backend from before per-request ranking echoes nothing, and
 uv run locomo-eval --run-id vector-only --ranking text_weight=0
 ```
 
-### Comparing search settings on one index
+### Stages
 
-Search settings only affect querying, so ingest once and re-query the same
-tomes with each setting:
+The default command is three stages, each of which can also run on its own.
+They pass data through files in `results/`, like `extract` and `answer`:
+
+| Stage | Command | Reads | Writes |
+|---|---|---|---|
+| extract | `locomo-eval extract` | the dataset | `results/extractions.jsonl` ([below](#extracting-memories-locomo-eval-extract)) |
+| ingest | `locomo-eval ingest --run-id base` | the dataset (and extractions) | the tomes, `results/base.ingest.json` |
+| retrieve | `locomo-eval retrieve base [--tag NAME]` | `base.ingest.json`, the tomes | `results/base.json` or `results/base.<tag>.json` |
+| answer + judge | `locomo-eval answer base [--tag NAME]` | the retrieval results | answers in the same file ([below](#scoring-answers-locomo-eval-answer)) |
+| cleanup | `locomo-eval cleanup base` | `base.ingest.json` | destroys the tomes |
 
 ```bash
-uv run locomo-eval --run-id base --keep-tomes
-uv run locomo-eval --run-id text-or --reuse-tomes base --ranking text_query=or
-uv run locomo-eval --run-id bm25 --reuse-tomes base --ranking '{"text_query": "bm25", "bm25_k1": 1.5}'
-uv run locomo-eval --cleanup base
+uv run locomo-eval ingest --run-id base [--ingest turns|extracted] [--samples ...]
+uv run locomo-eval retrieve base [--ks 1,5,10] [--answer-k 10] [--ranking ...] [--tag bm25]
+uv run locomo-eval answer base --answer-model ... --judge-model ...
+uv run locomo-eval cleanup base
+uv run locomo-eval          # ingest -> retrieve -> cleanup, as always
+```
+
+**`ingest`** fills `temp-locomo-<run-id>-<sample-id>` and leaves the tomes in
+place. It takes everything about how they are filled: `--ingest`,
+`--superseded`, the extraction cache options, `--no-occurred-at`,
+`--embedding-model` and `--concurrency`. Its manifest,
+`results/<run-id>.ingest.json`, holds the key map (memory key -> source dialog
+ids, written after supersession, so memories `--superseded forget` removed
+are gone from it), the dataset sha256, git commit, embedding model,
+`ingestion` (the mode and, for extracted runs, the extraction config with its
+`variant` and `recall` block), `chunking` (with `superseded`), per-sample
+memory counts, and whether the tomes are still `kept`. It refuses a run id
+whose tomes are still kept, since ingesting on top would mix the two.
+
+**`retrieve <run-id>`** scores the tomes without ingesting anything. How they
+were filled - mode, lifecycle variant, `superseded` - comes from the manifest,
+so it can't be given differently on the command line. It stops with a clear
+message if the manifest is missing, the tomes were cleaned up or are gone from
+the backend, `--data` isn't the dataset that was ingested, or `--samples`
+names a conversation the ingest didn't. `--samples` defaults to all the
+ingested ones. `--tag NAME` writes `results/<run-id>.<tag>.json`, so several
+retrieval configs can sit next to one ingest; pass `--tag` to `answer` to
+score one. Results have the same format as the default command's, with
+`reused_tomes` naming the ingest run.
+
+**`cleanup <run-id>`** destroys the tomes the manifest lists (one per dataset
+sample, or `--samples`, when there is no manifest) and marks the manifest
+`destroyed`. `--cleanup RUN_ID` still works, as a deprecated alias.
+
+**The default command** runs ingest, retrieve and cleanup in one process.
+Its results are the same as before the split, plus the manifest.
+`--keep-tomes` skips cleanup, and `--reuse-tomes X` is `retrieve X`, writing
+`results/<run-id>.json`. A `--keep-tomes` run from before the manifest (a
+`<run-id>.keys.json` next to its results) can still be reused and cleaned up.
+
+Search settings only affect querying, so ingest once and sweep them:
+
+```bash
+uv run locomo-eval ingest --run-id base
+uv run locomo-eval retrieve base --tag plain
+uv run locomo-eval retrieve base --tag text-or --ranking text_query=or --compare base.plain
+uv run locomo-eval retrieve base --tag bm25 --ranking '{"text_query": "bm25", "bm25_k1": 1.5}' --compare base.plain
+uv run locomo-eval cleanup base
 ```
 
 ### Cleanup and reproducibility
 
-Every run uses fresh tomes and destroys them when each conversation is scored,
-so reruns start from an empty index and leave nothing behind. If a run is
-killed hard (or used `--keep-tomes`), destroy its tomes with:
+Every run uses fresh tomes and destroys them once it has scored them, so
+reruns start from an empty index and leave nothing behind. A failed ingest
+destroys the tomes it wrote. If a run is killed hard, or you ran `ingest` or
+`--keep-tomes`, destroy its tomes with:
 
 ```bash
-uv run locomo-eval --cleanup <run-id>
+uv run locomo-eval cleanup <run-id>
 ```
 
 ### Tests
@@ -132,8 +187,8 @@ uv run locomo-eval --cleanup <run-id>
 uv run pytest
 ```
 
-The tests cover dataset parsing, scoring, and the run loop against an
-in-memory fake client; they don't need a backend.
+The tests cover dataset parsing, scoring, and the ingest, retrieve and cleanup
+stages against an in-memory fake client; they don't need a backend.
 
 ### LLM calls (answering and judging)
 
@@ -244,6 +299,8 @@ For each question it answers from the top `answer_k` stored contexts
 the answer by token F1, then asks the judge for a verdict. A failed or killed
 answer stage never re-ingests or re-queries, and one retrieval run can be
 scored by several answer and judge configs over the same contexts.
+`--tag NAME` scores a tagged retrieval, `results/<run-id>.<tag>.json` from
+`locomo-eval retrieve --tag`; its answer checkpoints are its own.
 
 **Setup.** Publish Ollama's port and pull the chat models as described under
 [LLM calls](#llm-calls-answering-and-judging) (`docker-compose.eval.yml`, then
@@ -439,9 +496,10 @@ extraction at all stops the run. The default stays `--ingest turns`, so
 earlier results remain comparable.
 
 Every recall hit maps back to its memory's `source_dia_ids`, so the key map is
-memory key -> source dialog ids (one id per key for turns). `--keep-tomes` and
-`--reuse-tomes` work in both modes; `--reuse-tomes` refuses a run that was
-ingested in the other mode.
+memory key -> source dialog ids (one id per key for turns). The stages work in
+both modes: `retrieve` takes the mode from the ingest manifest, and
+`--reuse-tomes` refuses an `--ingest` or `--superseded` that disagrees with
+it.
 
 Metrics, per category (see [`metrics.py`](src/locomo_eval/metrics.py)):
 
