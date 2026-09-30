@@ -12,6 +12,8 @@ including on failure.
 `locomo-eval answer <run-id> ...` then scores a finished run's answers
 offline; see `locomo-eval answer --help`. `locomo-eval extract ...` has a
 local LLM choose the memories to store instead; see `locomo-eval extract --help`.
+`locomo-eval judge-agreement <run-id> ...` checks the judges that scored a run
+against hand labels; see `locomo-eval judge-agreement --help`.
 """
 
 import argparse
@@ -30,7 +32,7 @@ import httpx
 from connectomeclient import ConnectomeClient
 from dotenv import load_dotenv
 
-from locomo_eval import answering, extraction
+from locomo_eval import answering, extraction, judge_labels
 from locomo_eval.dataset import Sample, Turn, load_dataset
 from locomo_eval.extraction import (
     DEFAULT_CACHE_PATH,
@@ -503,6 +505,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if argv[:1] == ["extract"]:
         extraction.main(argv[1:])
+        return
+    if argv[:1] == ["judge-agreement"]:
+        judge_labels.main(argv[1:])
         return
     args = parse_args(argv)
     if not args.data.exists():
