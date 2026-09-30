@@ -225,6 +225,93 @@ async def test_remember_rejects_malformed_occurred_at(patch_async_client):
         _ = await client.remember("hello", occurred_at="not-a-date")
 
 
+async def test_remember_writes_null_derived_from_when_not_given(patch_async_client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"message": "success"})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    _ = await client.remember("hello")
+
+    body = captured["request"].content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    frontmatter_yaml = document.split("---\n", 2)[1]
+    metadata = yaml.safe_load(frontmatter_yaml)
+
+    assert "derived_from" in metadata
+    assert metadata["derived_from"] is None
+
+
+async def test_remember_writes_explicit_derived_from(patch_async_client):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"message": "success"})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    _ = await client.remember("hello", derived_from="mem_source.md")
+
+    body = captured["request"].content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    frontmatter_yaml = document.split("---\n", 2)[1]
+    metadata = yaml.safe_load(frontmatter_yaml)
+
+    assert metadata["derived_from"] == "mem_source.md"
+
+
+async def test_remember_front_matter_matches_mcp_key_layout(patch_async_client):
+    """Same keys, order, and values as connectomemcp.server.format_memory
+    writes for the same arguments (created_at/id aside, which are generated)."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(200, json={"message": "success"})
+
+    set_handler(patch_async_client, handler)
+
+    client = make_client()
+    occurred_at = "2023-06-15T09:30:00+00:00"
+    _ = await client.remember(
+        "hello",
+        memory_type="fact",
+        entities=["alice"],
+        acl=["GM"],
+        occurred_at=occurred_at,
+        derived_from="mem_source.md",
+    )
+
+    body = captured["request"].content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    frontmatter_yaml = document.split("---\n", 2)[1]
+    metadata = yaml.safe_load(frontmatter_yaml)
+
+    assert list(metadata) == [
+        "version",
+        "id",
+        "type",
+        "created_at",
+        "occurred_at",
+        "source",
+        "entities",
+        "relationships",
+        "acl",
+        "derived_from",
+    ]
+    assert metadata["type"] == "fact"
+    assert metadata["entities"] == ["alice"]
+    assert metadata["acl"] == ["GM"]
+    assert metadata["occurred_at"] == occurred_at
+    assert metadata["derived_from"] == "mem_source.md"
+
+
 async def test_recall_sends_query_and_filters(patch_async_client):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"results": []})
