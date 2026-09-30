@@ -29,6 +29,9 @@ from locomo_eval.scoring import ADVERSARIAL
 
 PROMPTS_DIR = Path(__file__).resolve().parent
 ANSWER_VERSION = "answer_v1"
+# Describes both turn and extracted-memory contexts, spells out relative-date
+# arithmetic and allows inference the excerpts support.
+ANSWER_V2_VERSION = "answer_v2"
 JUDGE_VERSION = "judge_v1"
 
 # What the answer prompt tells the model to say when the context lacks the
@@ -87,8 +90,9 @@ def _chronological_key(context: Context) -> tuple[int, int, str]:
 
 
 def answer_prompt(prompt: Prompt, question: str, contexts: Iterable[Context]) -> str:
-    """The answer prompt for a question and its retrieved turns. Turns are
-    sorted by date; each turn's text already starts with its session date."""
+    """The answer prompt for a question and its retrieved contexts, sorted by
+    date. A turn's text already starts with its session date; an extracted
+    memory sorts by the first turn it cites."""
     ordered = sorted(contexts, key=_chronological_key)
     return prompt.render(context="\n".join(c.text for c in ordered), question=question)
 

@@ -6,7 +6,7 @@ from locomo_eval.extraction import (
     EXTRACT_VERSION,
     LIFECYCLE_VERSION,
 )
-from locomo_eval.prompts import load_prompt
+from locomo_eval.prompts import ANSWER_V2_VERSION, ANSWER_VERSION, load_prompt
 
 NOTEBOOK = Path(__file__).resolve().parents[1] / "kaggle.ipynb"
 
@@ -43,5 +43,8 @@ def test_default_config_is_valid():
     assert config["REPO_REF"] == "main"
     assert config["EXTRACT_PROMPT"] == EXTRACT_VERSION
     assert load_prompt(config["EXTRACT_PROMPT"]).version in (EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION)
+    assert config["ANSWER_PROMPT"] == ANSWER_VERSION
+    assert load_prompt(config["ANSWER_PROMPT"]).version in (ANSWER_VERSION, ANSWER_V2_VERSION)
+    assert config["ANSWER_K"] is None and config["ANSWER_THINK"] is False
     assert 0 < config["TIME_LIMIT_HOURS"] < 12
     assert config["CONCURRENCY"] >= 1

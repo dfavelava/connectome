@@ -9,6 +9,7 @@ from locomo_eval import answering, cli
 from locomo_eval.answering import (
     ANSWER,
     JUDGE,
+    THINK_NUM_PREDICT,
     AnswerConfig,
     Checkpoint,
     Question,
@@ -20,6 +21,7 @@ from locomo_eval.answering import (
 from locomo_eval.llm import Completion, LLMError, SamplingOptions
 from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
+    ANSWER_V2_VERSION,
     ANSWER_VERSION,
     JUDGE_VERSION,
     NOT_MENTIONED,
@@ -256,6 +258,32 @@ def test_config_hash_is_stable_and_sensitive():
     assert config(options=replace(SamplingOptions(), temperature=0.5)).hash() != config().hash()
 
 
+def test_answer_think_is_a_separate_config_and_only_the_answer_thinks(tmp_path):
+    # Off, the config is as it was before the option, so earlier hashes hold.
+    assert "answer_options" not in config().to_dict()
+    thinking = config(answer_think=True)
+    assert thinking.hash() != config().hash()
+    assert thinking.to_dict()["answer_options"]["think"] is True
+
+    seen = []
+
+    class Recording(FakeLLM):
+        async def complete(self, model, system, user, *, stage="default", options=None, **kwargs):
+            seen.append((stage, options or self.options))
+            return await super().complete(model, system, user, stage=stage, options=options, **kwargs)
+
+    run(FakeLLM(), config(), QUESTIONS, tmp_path)
+    run(Recording(), thinking, QUESTIONS, tmp_path)
+    # Checkpointed answers without thinking aren't reused; the fake's answers
+    # are the same, so the verdicts are.
+    assert [stage for stage, _ in seen] == [ANSWER] * 4
+    run(Recording(), thinking, QUESTIONS, tmp_path / "fresh")
+    answers = [options for stage, options in seen if stage == ANSWER]
+    judges = [options for stage, options in seen if stage == JUDGE]
+    assert len(answers) == 8 and all(o.think and o.num_predict == THINK_NUM_PREDICT for o in answers)
+    assert judges and all(not o.think and o.num_predict == SamplingOptions().num_predict for o in judges)
+
+
 def test_select_questions():
     other = replace(question(9), sample_id="conv-2", question_id="conv-2#9")
     questions = [*QUESTIONS, question(4, answer=None), other]
@@ -319,6 +347,20 @@ def test_cli_answer_subcommand_writes_results_next_to_retrieval(tmp_path, monkey
     # A rerun is served from the checkpoint.
     cli.main(argv)
     assert clients[-1].calls == []
+
+
+def test_cli_answer_selects_prompt_and_thinking(tmp_path, monkeypatch):
+    path = retrieval_run(tmp_path)
+    monkeypatch.setattr(answering, "LLMClient", lambda **kwargs: FakeLLM(**kwargs))
+    base = ["answer", "base", "--answer-model", "ollama:a", "--judge-model", "ollama:j", "--results-dir", str(tmp_path)]
+    cli.main(base)
+    cli.main([*base, "--answer-prompt", ANSWER_V2_VERSION, "--answer-think"])
+
+    entries = json.loads(path.read_text())["answers"].values()
+    assert sorted((e["config"]["answer_prompt"]["version"], "answer_options" in e["config"]) for e in entries) == [
+        (ANSWER_VERSION, False),
+        (ANSWER_V2_VERSION, True),
+    ]
 
 
 def test_cli_answer_reports_failure_and_resumes(tmp_path, monkeypatch):

@@ -5,9 +5,11 @@ import json
 import httpx
 import pytest
 
+from locomo_eval.dataset import CATEGORY_NAMES
 from locomo_eval.llm import RETRY_TEMPERATURE, LLMClient
 from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
+    ANSWER_V2_VERSION,
     ANSWER_VERSION,
     JUDGE_SCHEMA,
     JUDGE_VERSION,
@@ -26,7 +28,7 @@ from locomo_eval.prompts import (
 from locomo_eval.scoring import ADVERSARIAL, SINGLE_HOP
 
 
-@pytest.mark.parametrize("version", [ANSWER_VERSION, JUDGE_VERSION])
+@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION, JUDGE_VERSION])
 def test_load_committed_prompt(version):
     prompt = load_prompt(version)
     data = (PROMPTS_DIR / f"{version}.txt").read_bytes()
@@ -55,17 +57,37 @@ def test_load_prompt_missing_version():
         load_prompt("answer_v999")
 
 
-def test_answer_prompt_sorts_contexts_by_date():
+@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION])
+def test_answer_prompt_sorts_contexts_by_date(version):
     contexts = [
         Context("D10:2", "[1:00 pm on 3 July, 2023] Caroline: third"),
         Context("D2:5", "[2:00 pm on 8 May, 2023] Melanie: second"),
         Context("D2:1", "[2:00 pm on 8 May, 2023] Caroline: first"),
     ]
-    text = answer_prompt(load_prompt(ANSWER_VERSION), "What happened?", contexts)
+    text = answer_prompt(load_prompt(version), "What happened?", contexts)
     assert "Question: What happened?" in text
     assert "[2:00 pm on 8 May, 2023] Caroline: first\n[2:00 pm on 8 May, 2023] Melanie: second\n[1:00 pm on 3 July, 2023] Caroline: third" in text
     assert NOT_MENTIONED in text
     assert "$" not in text
+
+
+def test_answer_v2_shows_extracted_memories_and_keeps_the_abstention():
+    contexts = [
+        Context("D3:4", "Sam moved to a new city on 2 June 2023."),
+        Context("D1:2", "Sam finished a first pottery class on 11 March 2023."),
+    ]
+    text = answer_prompt(load_prompt(ANSWER_V2_VERSION), "When did Sam move?", contexts)
+    assert "Sam finished a first pottery class on 11 March 2023.\nSam moved to a new city on 2 June 2023.\n" in text
+    # The adversarial scoring depends on the exact abstention.
+    assert f"reply exactly: {NOT_MENTIONED}" in text
+    assert text.endswith("Question: When did Sam move?\nAnswer:\n")
+
+
+def test_answer_v2_is_generic():
+    lowered = load_prompt(ANSWER_V2_VERSION).text.lower()
+    # No dataset speakers or category names; the examples use a made-up person.
+    for word in ("caroline", "melanie", "lgbtq", *CATEGORY_NAMES.values()):
+        assert word not in lowered
 
 
 def test_judge_prompt_regular_question():

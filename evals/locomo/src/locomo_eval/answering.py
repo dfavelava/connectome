@@ -9,6 +9,10 @@ judge for a CORRECT/WRONG verdict. The summary goes back into the same file
 under "answers", keyed by a hash of the answer config, so one retrieval run
 can be scored by several answer and judge configs over the same contexts.
 
+`--answer-think` lets the answer model think before it answers (the judge
+never does), with a larger output cap for the thinking tokens. It is part of
+the config, so thinking and non-thinking scores sit side by side.
+
 Every finished stage call is appended to results/<run-id>.<cfg-hash>.jsonl
 (fsynced per line) keyed by (question_id, stage, model, prompt version and
 sha256, context hash, sampling options). A rerun skips keys already there, so
@@ -30,7 +34,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -64,6 +68,9 @@ ANSWER = "answer"
 JUDGE = "judge"
 STAGES = (ANSWER, JUDGE)
 _CFG_HASH = re.compile(r"^[0-9a-f]{12}$")
+# Output cap for an answer call with thinking on: the thinking counts against
+# num_predict, and a cut-off thought leaves an empty answer.
+THINK_NUM_PREDICT = 4096
 
 
 @dataclass(frozen=True)
@@ -74,9 +81,11 @@ class AnswerConfig:
     judge_prompt: Prompt
     answer_k: int
     options: SamplingOptions = SamplingOptions()
+    # Let the answer model think; the judge's options are left as they are.
+    answer_think: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        config = {
             "answer_model": self.answer_model,
             "judge_model": self.judge_model,
             "answer_prompt": self.answer_prompt.config(),
@@ -85,6 +94,10 @@ class AnswerConfig:
             "temperature": self.options.temperature,
             "options": asdict(self.options),
         }
+        if self.answer_think:
+            # Only when on, so configs from before the option keep their hashes.
+            config["answer_options"] = asdict(self.stage_options(ANSWER))
+        return config
 
     def hash(self) -> str:
         """12 hex digits identifying everything that decides the scores."""
@@ -95,6 +108,11 @@ class AnswerConfig:
 
     def prompt(self, stage: str) -> Prompt:
         return self.answer_prompt if stage == ANSWER else self.judge_prompt
+
+    def stage_options(self, stage: str) -> SamplingOptions:
+        if stage == ANSWER and self.answer_think:
+            return replace(self.options, think=True, num_predict=max(self.options.num_predict, THINK_NUM_PREDICT))
+        return self.options
 
 
 @dataclass(frozen=True)
@@ -274,7 +292,6 @@ async def run_answers(
     call already finished is in the checkpoint for the rerun."""
     semaphore = asyncio.Semaphore(concurrency)
     progress = Progress(total=len(questions))
-    stage_options = options_hash(config.options)
 
     async def stage(question: Question, name: str, context_hash: str, call) -> tuple[dict, bool]:
         prompt = config.prompt(name)
@@ -285,7 +302,7 @@ async def run_answers(
             "prompt_version": prompt.version,
             "prompt_sha256": prompt.sha256,
             "context_hash": context_hash,
-            "options_hash": stage_options,
+            "options_hash": options_hash(config.stage_options(name)),
         }
         if (cached := checkpoint.get(record_key(record))) is not None:
             progress.cached_calls += 1
@@ -305,7 +322,7 @@ async def run_answers(
 
             async def call_answer(recording: _Recording) -> dict:
                 text = answer_prompt(config.answer_prompt, question.question, question.contexts[: config.answer_k])
-                completion = await recording.complete(config.answer_model, "", text, stage=ANSWER)
+                completion = await recording.complete(config.answer_model, "", text, stage=ANSWER, options=config.stage_options(ANSWER))
                 return {"answer": completion.text}
 
             answer_record, fresh_answer = await stage(question, ANSWER, answer_context_hash(question, config.answer_k), call_answer)
@@ -436,6 +453,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--judge-model", required=True, help="provider:model that judges; ideally at least as large as the answer model and another family")
     parser.add_argument("--answer-prompt", default=ANSWER_VERSION, help="answer prompt version (default: %(default)s)")
     parser.add_argument("--judge-prompt", default=JUDGE_VERSION, help="judge prompt version (default: %(default)s)")
+    parser.add_argument("--answer-think", action="store_true", help="let the answer model think before answering; slower, and a separate config")
     parser.add_argument("--answer-k", type=int, help="contexts shown to the answer model (default: the retrieval run's answer_k)")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where the run's files live (default: %(default)s)")
     parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to score (default: all in the run)")
@@ -477,6 +495,7 @@ def main(argv: list[str] | None = None) -> None:
             answer_prompt=load_prompt(args.answer_prompt),
             judge_prompt=load_prompt(args.judge_prompt),
             answer_k=answer_k,
+            answer_think=args.answer_think,
         )
     except (ValueError, FileNotFoundError) as exc:
         sys.exit(str(exc))
