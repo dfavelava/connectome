@@ -86,33 +86,35 @@ Useful flags (`uv run locomo-eval --help` for all):
 Ingestion embeds each turn, so a full run (~5,900 turns, ~1,980 scored
 questions) takes a while on CPU-only Ollama; `--samples` is the quick loop.
 
-### Vector-only vs hybrid
+### Search settings
 
-The search blend is configured on the backend, not per request: set
-`SEARCH_TEXT_WEIGHT=0` in `backend/.env` and restart the backend for a
-vector-only run. The backend doesn't expose its weights over HTTP, so export
-the same `SEARCH_VECTOR_WEIGHT` / `SEARCH_TEXT_WEIGHT` / `SEARCH_RRF_K`
-values when running the harness for them to be recorded correctly in the
-result config (unset values are recorded as the backend defaults):
+Ranking settings are sent per request, so no backend restart is needed.
+`--ranking` takes a JSON object or repeatable `key=value` pairs, applied to
+every query; anything left out keeps the backend's env or default value
+(`SEARCH_*` in `backend/.env`). Keys: `vector_weight`, `text_weight`, `rrf_k`,
+`text_query` (`plain`, `websearch`, `or`, `and_or`, `bm25`, `rare_or`),
+`bm25_k1`, `bm25_b`, `text_max_df`. The backend rejects bad values with a 400.
+
+The result config's `search` block is the ranking the backend echoed in its
+search responses, so it records what actually ran, not this process's
+environment. A backend from before per-request ranking echoes nothing, and
+`search` is then `null`.
 
 ```bash
-SEARCH_TEXT_WEIGHT=0 uv run locomo-eval --run-id vector-only
+uv run locomo-eval --run-id vector-only --ranking text_weight=0
 ```
 
 ### Comparing search settings on one index
 
 Search settings only affect querying, so ingest once and re-query the same
-tomes after restarting the backend with each setting:
+tomes with each setting:
 
 ```bash
 uv run locomo-eval --run-id base --keep-tomes
-# restart the backend with SEARCH_TEXT_QUERY=or, then:
-SEARCH_TEXT_QUERY=or uv run locomo-eval --run-id text-or --reuse-tomes base
+uv run locomo-eval --run-id text-or --reuse-tomes base --ranking text_query=or
+uv run locomo-eval --run-id bm25 --reuse-tomes base --ranking '{"text_query": "bm25", "bm25_k1": 1.5}'
 uv run locomo-eval --cleanup base
 ```
-
-As with the weights, `SEARCH_TEXT_QUERY` is recorded from the harness's
-environment, so export the value the backend is running with.
 
 ### Cleanup and reproducibility
 

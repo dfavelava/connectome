@@ -23,7 +23,9 @@ const (
 // SearchIndex is the subset of *daos.EmbeddingsDao the search resource needs
 // to run a filtered hybrid (vector + full-text) search.
 type SearchIndex interface {
-	Search(ctx context.Context, queryText string, queryEmbedding []float32, k int, filters daos.SearchFilters) ([]daos.SearchHit, error)
+	Search(ctx context.Context, queryText string, queryEmbedding []float32, k int, filters daos.SearchFilters, ranking daos.Ranking) ([]daos.SearchHit, error)
+	// DefaultRanking is what a request's ranking overrides are merged onto.
+	DefaultRanking() daos.Ranking
 }
 
 type SearchResourceImpl struct {
@@ -48,6 +50,80 @@ type SearchFiltersRequest struct {
 	Tome *string `json:"tome,omitempty"`
 }
 
+// RankingRequest overrides the backend's env-derived ranking settings for one
+// search. A nil field keeps the default.
+type RankingRequest struct {
+	VectorWeight *float64 `json:"vector_weight,omitempty"`
+	TextWeight   *float64 `json:"text_weight,omitempty"`
+	RRFK         *float64 `json:"rrf_k,omitempty"`
+	TextQuery    *string  `json:"text_query,omitempty"`
+	BM25K1       *float64 `json:"bm25_k1,omitempty"`
+	BM25B        *float64 `json:"bm25_b,omitempty"`
+	TextMaxDF    *float64 `json:"text_max_df,omitempty"`
+}
+
+// RankingResponse is the effective ranking a search ran with.
+type RankingResponse struct {
+	VectorWeight float64 `json:"vector_weight"`
+	TextWeight   float64 `json:"text_weight"`
+	RRFK         float64 `json:"rrf_k"`
+	TextQuery    string  `json:"text_query"`
+	BM25K1       float64 `json:"bm25_k1"`
+	BM25B        float64 `json:"bm25_b"`
+	TextMaxDF    float64 `json:"text_max_df"`
+}
+
+// mergeRanking applies overrides onto base and validates the result. With no
+// overrides it returns base untouched and unvalidated, so a request without
+// `ranking` behaves exactly as before even under an odd env config.
+func mergeRanking(base daos.Ranking, req *RankingRequest) (daos.Ranking, error) {
+	if req == nil {
+		return base, nil
+	}
+	ranking := base
+	if req.VectorWeight != nil {
+		ranking.Weights.Vector = *req.VectorWeight
+	}
+	if req.TextWeight != nil {
+		ranking.Weights.Text = *req.TextWeight
+	}
+	if req.RRFK != nil {
+		ranking.Weights.RRFRankConstant = *req.RRFK
+	}
+	if req.TextQuery != nil {
+		mode, ok := daos.ParseTextQueryMode(*req.TextQuery)
+		if !ok {
+			return daos.Ranking{}, fmt.Errorf("text_query %q is not one of plain, websearch, or, and_or, bm25, rare_or", *req.TextQuery)
+		}
+		ranking.TextQuery = mode
+	}
+	if req.BM25K1 != nil {
+		ranking.BM25.K1 = *req.BM25K1
+	}
+	if req.BM25B != nil {
+		ranking.BM25.B = *req.BM25B
+	}
+	if req.TextMaxDF != nil {
+		ranking.BM25.MaxDF = *req.TextMaxDF
+	}
+	if err := ranking.Validate(); err != nil {
+		return daos.Ranking{}, err
+	}
+	return ranking, nil
+}
+
+func rankingResponse(r daos.Ranking) RankingResponse {
+	return RankingResponse{
+		VectorWeight: r.Weights.Vector,
+		TextWeight:   r.Weights.Text,
+		RRFK:         r.Weights.RRFRankConstant,
+		TextQuery:    string(r.TextQuery),
+		BM25K1:       r.BM25.K1,
+		BM25B:        r.BM25.B,
+		TextMaxDF:    r.BM25.MaxDF,
+	}
+}
+
 type SearchRequest struct {
 	Query   string                `json:"query"`
 	K       int                   `json:"k,omitempty"`
@@ -58,6 +134,9 @@ type SearchRequest struct {
 	// its member_of groups are returned. Omitted/nil applies no acl
 	// filtering. See SearchResourceImpl.resolveACLScope.
 	As *string `json:"as,omitempty"`
+	// Ranking overrides the env-derived ranking settings for this request
+	// only; omitted fields keep their defaults.
+	Ranking *RankingRequest `json:"ranking,omitempty"`
 }
 
 type SearchResult struct {
@@ -102,6 +181,12 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		k = maxSearchK
 	}
 
+	ranking, err := mergeRanking(resource.index.DefaultRanking(), req.Ranking)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid ranking: %v", err)})
+		return
+	}
+
 	queryEmbedding, err := resource.embedder.EmbedQuery(c.Request.Context(), req.Query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("embed query: %v", err)})
@@ -124,7 +209,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		filters.ACLScope = resource.resolveACLScope(*req.As)
 	}
 
-	hits, err := resource.index.Search(c.Request.Context(), req.Query, queryEmbedding, k, filters)
+	hits, err := resource.index.Search(c.Request.Context(), req.Query, queryEmbedding, k, filters, ranking)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("search: %v", err)})
 		return
@@ -140,7 +225,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		results[i].Key = TomeUnscopedKey(filters.TomeID, results[i].Key)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"results": results})
+	c.JSON(http.StatusOK, gin.H{"results": results, "ranking": rankingResponse(ranking)})
 }
 
 func (resource *SearchResourceImpl) hydrateResults(hits []daos.SearchHit) []SearchResult {

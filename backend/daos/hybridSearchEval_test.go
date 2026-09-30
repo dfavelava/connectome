@@ -129,14 +129,15 @@ func TestHybridSearchEvalSet(t *testing.T) {
 	}
 
 	for _, mode := range allTextQueryModes {
-		modeDao := &EmbeddingsDao{pool: pool, weights: DefaultHybridWeights(), textQuery: mode, bm25: DefaultBM25Params()}
+		modeDao := &EmbeddingsDao{pool: pool}
+		ranking := Ranking{Weights: DefaultHybridWeights(), TextQuery: mode, BM25: DefaultBM25Params()}
 		for _, tc := range cases {
 			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
 				expectedTop := tc.expectedTop
 				if override, ok := tc.expectedTopByMode[mode]; ok {
 					expectedTop = override
 				}
-				hits, err := modeDao.Search(ctx, tc.query, query, 10, SearchFilters{Entity: strPtr("eval"), TomeID: tome})
+				hits, err := modeDao.Search(ctx, tc.query, query, 10, SearchFilters{Entity: strPtr("eval"), TomeID: tome}, ranking)
 				if err != nil {
 					t.Fatalf("search: %v", err)
 				}
@@ -197,8 +198,9 @@ func TestHybridSearchCommonTermMustNotOutrankRare(t *testing.T) {
 	}
 	for _, mode := range allTextQueryModes {
 		t.Run(string(mode), func(t *testing.T) {
-			modeDao := &EmbeddingsDao{pool: pool, weights: DefaultHybridWeights(), textQuery: mode, bm25: DefaultBM25Params()}
-			hits, err := modeDao.Search(ctx, "When did Caroline try pottery?", axisVector(768, 1.0), 10, SearchFilters{TomeID: tome})
+			modeDao := &EmbeddingsDao{pool: pool}
+			ranking := Ranking{Weights: DefaultHybridWeights(), TextQuery: mode, BM25: DefaultBM25Params()}
+			hits, err := modeDao.Search(ctx, "When did Caroline try pottery?", axisVector(768, 1.0), 10, SearchFilters{TomeID: tome}, ranking)
 			if err != nil {
 				t.Fatalf("search: %v", err)
 			}

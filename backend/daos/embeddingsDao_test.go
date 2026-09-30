@@ -246,7 +246,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	query := unitVector(768, 0)
 
 	t.Run("no filters ranks by distance and collapses to the best chunk", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -270,7 +270,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("type filter excludes other types", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Type: strPtr("fact")})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Type: strPtr("fact")}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -282,7 +282,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("entity filter matches only memories with that entity", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Entity: strPtr("grace")})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Entity: strPtr("grace")}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -299,7 +299,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 
 	t.Run("since/until filter by created_at", func(t *testing.T) {
 		since := now.Add(-1 * time.Hour)
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Since: &since})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{Since: &since}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -310,7 +310,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 		}
 
 		until := yesterday.Add(1 * time.Hour)
-		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{Until: &until})
+		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{Until: &until}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -331,7 +331,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 		// since bound would, but for the opposite reason (occurred_at, not
 		// created_at).
 		occurredSince := now.Add(-1 * time.Hour)
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{OccurredSince: &occurredSince})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{OccurredSince: &occurredSince}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -345,7 +345,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 		// occurred_until bound must exclude them too, not fall back to
 		// created_at.
 		occurredUntil := occurredLastYear.Add(1 * time.Hour)
-		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{OccurredUntil: &occurredUntil})
+		hits, err = dao.Search(ctx, "", query, 10, SearchFilters{OccurredUntil: &occurredUntil}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -361,7 +361,7 @@ func TestEmbeddingsDaoSearchFiltersAndCollapsesPerKey(t *testing.T) {
 	})
 
 	t.Run("k limits the number of results", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 1, SearchFilters{Entity: strPtr("ada")})
+		hits, err := dao.Search(ctx, "", query, 1, SearchFilters{Entity: strPtr("ada")}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -416,7 +416,7 @@ func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
 	}
 
 	t.Run("nil ACLScope applies no acl filtering", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -429,7 +429,7 @@ func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
 	})
 
 	t.Run("ACLScope includes unrestricted and directly-matching acl, excludes the rest", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A"}})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A"}}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -449,7 +449,7 @@ func TestEmbeddingsDaoSearchFiltersByACLScope(t *testing.T) {
 	})
 
 	t.Run("ACLScope resolved through one level of member_of reaches the group's acl", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A", "Adventurers"}})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{ACLScope: []string{"Party A", "Adventurers"}}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -501,7 +501,7 @@ func TestEmbeddingsDaoSearchFiltersByTomeID(t *testing.T) {
 	}
 
 	t.Run("zero-value TomeID matches only the default tome", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -515,7 +515,7 @@ func TestEmbeddingsDaoSearchFiltersByTomeID(t *testing.T) {
 	})
 
 	t.Run("non-empty TomeID matches only that tome", func(t *testing.T) {
-		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{TomeID: "west-marches"})
+		hits, err := dao.Search(ctx, "", query, 10, SearchFilters{TomeID: "west-marches"}, dao.DefaultRanking())
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
@@ -561,7 +561,7 @@ func TestEmbeddingsDaoDeleteEmbeddingsForTomeRemovesOnlyThatTome(t *testing.T) {
 	}
 
 	query := unitVector(768, 0)
-	hits, err := dao.Search(ctx, "", query, 50, SearchFilters{})
+	hits, err := dao.Search(ctx, "", query, 50, SearchFilters{}, dao.DefaultRanking())
 	if err != nil {
 		t.Fatalf("search default tome: %v", err)
 	}
