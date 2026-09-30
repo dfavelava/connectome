@@ -12,6 +12,7 @@ from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
     JUDGE_SCHEMA,
+    JUDGE_V2_VERSION,
     JUDGE_VERSION,
     NOT_MENTIONED,
     PROMPTS_DIR,
@@ -28,7 +29,7 @@ from locomo_eval.prompts import (
 from locomo_eval.scoring import ADVERSARIAL, SINGLE_HOP
 
 
-@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION, JUDGE_VERSION])
+@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION, JUDGE_VERSION, JUDGE_V2_VERSION])
 def test_load_committed_prompt(version):
     prompt = load_prompt(version)
     data = (PROMPTS_DIR / f"{version}.txt").read_bytes()
@@ -100,6 +101,40 @@ def test_judge_prompt_regular_question():
 def test_judge_prompt_adversarial_question():
     text = judge_prompt(load_prompt(JUDGE_VERSION), "What did she paint?", ADVERSARIAL, "A horse.", adversarial_answer="a horse")
     assert f"Gold answer: {NOT_MENTIONED}\nTrap answer: a horse\nGenerated answer: A horse." in text
+
+
+@pytest.mark.parametrize("version", [JUDGE_VERSION, JUDGE_V2_VERSION])
+def test_judge_prompt_fills_every_placeholder(version):
+    text = judge_prompt(load_prompt(version), "What did she paint?", ADVERSARIAL, "A horse.", adversarial_answer="a horse")
+    assert text.endswith(f"Question: What did she paint?\nGold answer: {NOT_MENTIONED}\nTrap answer: a horse\nGenerated answer: A horse.\n")
+    assert "$" not in text
+
+
+def test_judge_v2_examples_are_valid_verdicts():
+    text = load_prompt(JUDGE_V2_VERSION).text
+    examples = [line for line in text.splitlines() if line.startswith("{")]
+    verdicts = [parse_judge_output(line) for line in examples]
+    # One example per leniency, the strict counterparts and the adversarial rule.
+    assert len(verdicts) == 8
+    assert {v.label for v in verdicts} == {"CORRECT", "WRONG"}
+
+
+def test_judge_v2_keeps_the_strict_rules():
+    text = load_prompt(JUDGE_V2_VERSION).text
+    # The adversarial rule is judge_v1's, word for word.
+    adversarial_rule = next(line for line in load_prompt(JUDGE_VERSION).text.splitlines() if line.startswith('- If the gold answer is "Not mentioned'))
+    assert adversarial_rule in text
+    assert "repeats the trap answer" in text
+    assert "a wrong name, place, number, date or item in place of the gold one is WRONG" in text
+    assert "An answer that contains none of the gold items is WRONG." in text
+    assert "A date outside the gold period is WRONG." in text
+
+
+def test_judge_v2_is_generic():
+    lowered = load_prompt(JUDGE_V2_VERSION).text.lower()
+    # Made-up examples, so none of them is also an item being judged.
+    for word in ("caroline", "melanie", "lgbtq", "transgender", *CATEGORY_NAMES.values()):
+        assert word not in lowered
 
 
 def test_judge_prompt_requires_gold_answer():

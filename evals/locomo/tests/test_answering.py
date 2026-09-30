@@ -23,6 +23,7 @@ from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
+    JUDGE_V2_VERSION,
     JUDGE_VERSION,
     NOT_MENTIONED,
     load_prompt,
@@ -361,6 +362,26 @@ def test_cli_answer_selects_prompt_and_thinking(tmp_path, monkeypatch):
         (ANSWER_VERSION, False),
         (ANSWER_V2_VERSION, True),
     ]
+
+
+def test_cli_answer_rescores_cached_answers_with_another_judge_prompt(tmp_path, monkeypatch):
+    path = retrieval_run(tmp_path)
+    clients = []
+
+    def factory(**kwargs):
+        clients.append(FakeLLM(**kwargs))
+        return clients[-1]
+
+    monkeypatch.setattr(answering, "LLMClient", factory)
+    base = ["answer", "base", "--answer-model", "ollama:a", "--judge-model", "ollama:j", "--results-dir", str(tmp_path)]
+    cli.main(base)
+    cli.main([*base, "--judge-prompt", JUDGE_V2_VERSION])
+
+    # Only the verdicts are redone; the answers come from judge_v1's checkpoint.
+    assert clients[-1].stage_calls(ANSWER) == 0 and clients[-1].stage_calls(JUDGE) > 0
+    entries = list(json.loads(path.read_text())["answers"].values())
+    assert sorted(e["config"]["judge_prompt"]["version"] for e in entries) == [JUDGE_VERSION, JUDGE_V2_VERSION]
+    assert [q["answer"] for q in entries[0]["questions"]] == [q["answer"] for q in entries[1]["questions"]]
 
 
 def test_cli_answer_reports_failure_and_resumes(tmp_path, monkeypatch):

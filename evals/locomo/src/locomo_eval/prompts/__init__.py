@@ -33,6 +33,10 @@ ANSWER_VERSION = "answer_v1"
 # arithmetic and allows inference the excerpts support.
 ANSWER_V2_VERSION = "answer_v2"
 JUDGE_VERSION = "judge_v1"
+# Lenient, like the Mem0/LoCoMo judge, on a date more specific than the gold
+# period, on lists with extra or missing (but no contradicting) items and on a
+# left-out qualifier; as strict as judge_v1 on wrong facts and abstentions.
+JUDGE_V2_VERSION = "judge_v2"
 
 # What the answer prompt tells the model to say when the context lacks the
 # answer; it is also the gold answer the judge sees for adversarial questions.

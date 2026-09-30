@@ -1,0 +1,66 @@
+You are grading an answer to a question about a conversation. Compare the generated answer with the gold answer and label it CORRECT or WRONG. An answer is CORRECT when it gets the same core facts right as the gold answer, even if it is less complete or more detailed; it is WRONG when it states a different fact, or none of the gold facts.
+
+Rules:
+- Be lenient on wording: a generated answer that is shorter, longer or phrased differently is CORRECT if it states the same facts as the gold answer.
+- Be lenient on date formats: "7 May 2023", "May 7, 2023" and "2023-05-07" are the same date. A relative date is CORRECT only if it points to the same date or period as the gold answer.
+- Be lenient on precision: a date that is more specific than the gold answer is CORRECT if it falls within the gold period (gold "July 2023", answer "3 July 2023"). A date outside the gold period is WRONG.
+- Be lenient on lists: an answer that contains every gold item is CORRECT, even with extra items, as long as no item contradicts the gold answer. An answer that contains some but not all of the gold items is also CORRECT if nothing in it contradicts the gold answer. An answer that contains none of the gold items is WRONG.
+- Be lenient on qualifiers: an answer that gets the core fact right but leaves out a detail of the gold answer is CORRECT, unless the question asks for that detail.
+- Be strict on facts: a wrong name, place, number, date or item in place of the gold one is WRONG, and so is an answer that adds a fact contradicting the gold answer.
+- If the gold answer is "Not mentioned in the conversation.", the conversation does not answer the question. The generated answer is CORRECT only if it says the information is not available. Stating the trap answer, or any other specific answer, is WRONG.
+
+Examples:
+Question: When did Sam start the pottery class?
+Gold answer: 11 March 2023
+Trap answer: (none)
+Generated answer: Sam started it on March 11th, 2023.
+{"reasoning": "Same date in a different format.", "label": "CORRECT"}
+
+Question: When did Sam move to the new city?
+Gold answer: June 2023
+Trap answer: (none)
+Generated answer: 2 June 2023
+{"reasoning": "A more specific date within the gold month.", "label": "CORRECT"}
+
+Question: When did Sam move to the new city?
+Gold answer: June 2023
+Trap answer: (none)
+Generated answer: 28 May 2023
+{"reasoning": "The date falls outside the gold month.", "label": "WRONG"}
+
+Question: Which instruments does Sam play?
+Gold answer: guitar, piano
+Trap answer: (none)
+Generated answer: Piano, guitar and a little drums.
+{"reasoning": "Contains every gold item; the extra item does not contradict the gold answer.", "label": "CORRECT"}
+
+Question: Which instruments does Sam play?
+Gold answer: guitar, piano
+Trap answer: (none)
+Generated answer: The piano.
+{"reasoning": "Names one of the gold items and nothing that contradicts the gold answer.", "label": "CORRECT"}
+
+Question: Which instruments does Sam play?
+Gold answer: guitar, piano
+Trap answer: (none)
+Generated answer: The violin.
+{"reasoning": "Names none of the gold items.", "label": "WRONG"}
+
+Question: What job is Sam training for?
+Gold answer: nursing in a children's hospital
+Trap answer: (none)
+Generated answer: Nursing.
+{"reasoning": "The core fact is right; it leaves out where, which the question does not ask about.", "label": "CORRECT"}
+
+Question: What did Sam bake for the party?
+Gold answer: Not mentioned in the conversation.
+Trap answer: a lemon cake
+Generated answer: A lemon cake.
+{"reasoning": "The conversation does not say this; the answer repeats the trap answer instead of abstaining.", "label": "WRONG"}
+
+Reply with only a JSON object: "reasoning" is one short sentence, "label" is "CORRECT" or "WRONG".
+
+Question: $question
+Gold answer: $gold_answer
+Trap answer: $trap_answer
+Generated answer: $generated_answer

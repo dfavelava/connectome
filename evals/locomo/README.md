@@ -202,7 +202,22 @@ result's recorded version always names the exact text it ran with.
   "WRONG"}`, lenient on phrasing and date format, strict on facts. For
   adversarial questions the gold answer is the abstention and the dataset's
   `adversarial_answer` is shown as a trap: only abstaining is CORRECT, and
-  repeating the trap is WRONG.
+  repeating the trap is WRONG. It is stricter than the Mem0/LoCoMo judge
+  behind published numbers: a list with one extra or missing item, a date
+  more specific than the gold one, or an answer without the gold's qualifier
+  is WRONG, which hits multi-hop list questions hardest.
+- `judge_v2` (`--judge-prompt judge_v2`; the default stays `judge_v1`)
+  aligns the leniency with the Mem0/LoCoMo judge, which accepts an answer on
+  the same topic as the gold. A date more specific than the gold period
+  is CORRECT when it falls within it (gold `July 2023`, answer `3 July 2023`),
+  and a date outside it is WRONG. A list is CORRECT when it contains at least
+  one gold item and nothing that contradicts the gold answer, so extra items
+  and missing items are both accepted, and a list with none of the gold items
+  is WRONG. An answer that gets the core fact right but leaves out a qualifier
+  is CORRECT unless the question asks for that qualifier. Wrong facts, the
+  adversarial rule, the output format and the strict parsing are the same as
+  in `judge_v1`. Its examples use a made-up person, so none of them is also
+  an item being judged.
 
 The judge is a small local model, so its reply is constrained with Ollama
 structured outputs (`format` set to the verdict's JSON schema) and then
@@ -300,6 +315,30 @@ each other, not with papers; token F1 is the number that compares with
 published results. Use a judge at least as large as the answer model, ideally
 from another model family, and spot-check its labels with `--judge-sample N`,
 which prints N random judged items (question, gold, answer, label, reasoning).
+
+**Checking a judge against hand labels.** A judge prompt can't be validated
+by its own scores, so `locomo-eval judge-agreement` compares every judge that
+scored a run with a hand-labelled sample, offline:
+
+```bash
+# 1. Draw a labelling sheet from one answer config (weighted towards multi-hop and temporal).
+uv run locomo-eval judge-agreement <run-id> --draw --config <cfg-hash> \
+  --samples conv-26 --out labels/judge-<run-id>-conv-26.jsonl
+# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules) and commit the file.
+# 3. Rescore with the other judge prompt (reuses the cached answers), then compare.
+uv run locomo-eval answer <run-id> ... --judge-prompt judge_v2
+uv run locomo-eval judge-agreement <run-id> --labels labels/judge-<run-id>-conv-26.jsonl
+```
+
+The sheet has each item's question, gold answer and generated answer, but
+not the judge's verdict, so labelling stays blind; `--weights` sets the
+questions per category (default `multi-hop=20,temporal=20,single-hop=10,
+open-domain=5,adversarial=5`) and `--seed` the draw. The report gives, per
+answer config and category, the agreement with the hand labels, false
+CORRECTs (the judge accepted an answer labelled WRONG), false WRONGs and null
+verdicts. A label only counts against a config that judged the identical
+answer, so configs that differ only in the judge are compared on the same
+items. Hand-labelled sheets live in [`labels/`](labels/).
 
 ### Extracting memories (`locomo-eval extract`)
 
