@@ -1,2 +1,4 @@
 data/
 results/
+# Hand-labelled sheets quote LoCoMo (CC BY-NC); they stay local.
+labels/*.jsonl

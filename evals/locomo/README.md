@@ -324,7 +324,7 @@ scored a run with a hand-labelled sample, offline:
 # 1. Draw a labelling sheet from one answer config (weighted towards multi-hop and temporal).
 uv run locomo-eval judge-agreement <run-id> --draw --config <cfg-hash> \
   --samples conv-26 --out labels/judge-<run-id>-conv-26.jsonl
-# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules) and commit the file.
+# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules).
 # 3. Rescore with the other judge prompt (reuses the cached answers), then compare.
 uv run locomo-eval answer <run-id> ... --judge-prompt judge_v2
 uv run locomo-eval judge-agreement <run-id> --labels labels/judge-<run-id>-conv-26.jsonl
@@ -338,7 +338,10 @@ answer config and category, the agreement with the hand labels, false
 CORRECTs (the judge accepted an answer labelled WRONG), false WRONGs and null
 verdicts. A label only counts against a config that judged the identical
 answer, so configs that differ only in the judge are compared on the same
-items. Hand-labelled sheets live in [`labels/`](labels/).
+items. Sheets quote LoCoMo questions and answers, which are CC BY-NC, so
+they are kept out of git: `labels/*.jsonl` is gitignored (see
+[`labels/`](labels/)). Keep a sheet with the run's results, since its labels
+only match the answers it was drawn from.
 
 ### Extracting memories (`locomo-eval extract`)
 

@@ -11,7 +11,8 @@ same answers is compared with it.
 config's questions, weighted by category (--weights), each with the question,
 gold answer, generated answer and an empty "label". The judge's label and
 reasoning are left out so labelling stays blind. Fill in each "label" (and
-optionally a "note") and commit the file.
+optionally a "note"). Sheets quote LoCoMo questions and answers, which are
+CC BY-NC, so labels/*.jsonl is gitignored and they stay local.
 
 --labels reports, for every answer config in results/<run-id>.json, how
 often its judge agrees with the hand labels: agreement, false CORRECTs (the
