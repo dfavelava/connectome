@@ -147,6 +147,7 @@ class ConnectomeClient:
         acl: list[str] | None = None,
         tome: str | None = None,
         occurred_at: str | None = None,
+        derived_from: str | None = None,
     ) -> dict[str, str]:
         """Write a memory document and return its key.
 
@@ -156,7 +157,15 @@ class ConnectomeClient:
 
         occurred_at is an optional RFC3339 timestamp for when the memory's
         described event actually happened, distinct from created_at (always
-        now). Omit when the event time is unknown or is simply now."""
+        now). Omit when the event time is unknown or is simply now.
+
+        derived_from is the key of another memory (e.g. 'mem_abc.md') this one
+        was derived from, such as the transcript chunk a fact was extracted
+        from.
+
+        Both keys are always written, as null when omitted, and derived_from
+        lands after acl - matching connectomemcp.server.format_memory's
+        front matter for the same arguments."""
         validate_occurred_at(occurred_at)
         memory_id = f"mem_{uuid.uuid4()}.md"
         now = datetime.now(UTC).isoformat()
@@ -172,6 +181,7 @@ class ConnectomeClient:
         }
         if acl is not None:
             metadata["acl"] = acl
+        metadata["derived_from"] = derived_from
         yaml_data = yaml.dump(metadata, sort_keys=False).strip("\n")
         document = f"---\n{yaml_data}\n---\n{content}\n"
 
