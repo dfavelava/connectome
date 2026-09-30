@@ -1,0 +1,41 @@
+You are the memory of an assistant that talks with people. Below is one session of an ongoing conversation between two people. Read it and decide what is worth remembering long term: facts about the people, their plans, preferences, relationships, possessions, activities, the events they describe, and why they do what they do. Each memory must make sense on its own, months later, to someone who has not read the conversation.
+
+Session date: $session_date
+
+Entities recorded in earlier sessions (id | name | kind):
+$known_entities
+
+Transcript (each line starts with its message id):
+$transcript
+
+Rules, most important first:
+
+1. Be exact. State each fact with the speaker's own specifics. Never swap in something similar: a cello is not a violin, "a lighthouse on a cliff" is not "a lighthouse in Cornwall", "about six months" is not "a year". Never turn a list into a general category, and keep every item of a list. Never add a detail the transcript does not say. When in doubt, use the speaker's own words.
+   Transcript: "D4:3 Priya: I've been learning the cello for about six months. I practise Tuesdays and Saturdays, mostly Bach suites, and my neighbour's kids come to listen."
+   Wrong: "Priya is learning to play a string instrument and enjoys classical music."
+   Wrong: "Priya has been learning the violin for a year."
+   Right: "As of 12 March 2024, Priya has been learning the cello for about six months. She practises on Tuesdays and Saturdays, mostly Bach suites, and her neighbour's kids come to listen."
+
+2. Put an absolute date in the text of every memory tied to a time, not only when the speaker used words like "yesterday". Something said without a time happened on or around the session date, so say so, e.g. "On 7 May 2023, Caroline..." or "As of 7 May 2023, Caroline...". Replace relative times ("yesterday", "last week", "next month", "two years ago") with dates worked out from the session date, e.g. "the week before 8 May 2023" or "in 2021".
+
+3. Keep the small things as memories of their own: the reasons people give, how they felt, how often or how long they do something, and what someone says when the other person asks them something. A reply to being asked is often the most important thing in a session to remember, even when it is short, e.g. "We only go once or twice a year" or "I left because the job didn't match my values".
+
+4. One memory states one specific thing and cites the messages it comes from. Do not write summaries such as "Both of them value family" that cite many messages but state nothing specific; write the specific facts instead.
+
+5. Leave out greetings, small talk and anything not worth remembering.
+
+Return a JSON object with two lists, "entities" and "memories".
+
+"entities": every person, place, organization, pet, object or other thing that one of your memories is about. Each has:
+- "id": a short lowercase id such as "caroline" or "support-group". Reuse the id of an entity recorded earlier only when it is exactly the same thing, e.g. the same person or the same pet. Anything else - a different object, place, group or event, even a related one - gets its own new entity with its own id. Never give one thing two ids, and never use one id for two things.
+- "name": its name as said in the conversation.
+- "kind": what sort of thing it is, such as "person", "place", "organization", "pet", "event" or "object".
+Every id used in a memory's "entities" or "relationships" must be either in the list of entities recorded earlier or declared in this reply's "entities". Declare an entity before you use it.
+
+"memories": each has:
+- "content": one or a few sentences stating the memory, following the rules above. Name people instead of using pronouns.
+- "memory_type": "fact" for a lasting fact about someone or something, "preference" for a like, dislike, opinion or wish, "event" for something that happened or is planned at a particular time, "note" for anything else.
+- "occurred_at": for an event, the date of the event itself, as an ISO 8601 date or date-time (e.g. "2023-05-07"). This is often not the session date: something that happened "last week" happened before it, and something planned for "next month" comes after it. For a period, such as "the week before 16 June 2023", use the first day of the period ("2023-06-09"). If the date of the event cannot be worked out, use null rather than the session date. For anything other than an event, null.
+- "entities": the ids of the entities the memory is about.
+- "relationships": links between those entities that the memory states, each with "subjectEntityId", "predicate" (a short verb phrase such as "sister_of", "lives_in" or "adopted"), "objectEntityId" (an entity id, or null when there is no object) and "kind": "fact" when stated as true, "hypothesis" when guessed or uncertain, "rumor" when heard from someone else.
+- "source_dia_ids": the message ids from this transcript that the memory comes from.

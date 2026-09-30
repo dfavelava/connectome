@@ -74,6 +74,8 @@ DEFAULT_DATA_PATH = PROJECT_DIR / "data" / "locomo10.json"
 DEFAULT_CACHE_PATH = PROJECT_DIR / "results" / "extractions.jsonl"
 DEFAULT_EXTRACTOR_MODEL = "ollama:qwen3:8b"
 EXTRACT_VERSION = "extract_v1"
+# Add-only like extract_v1, with stricter rules on accuracy, dates and entities.
+EXTRACT_V2_VERSION = "extract_v2"
 # Prompts named lifecycle_v<N> select the lifecycle variant; see is_lifecycle.
 LIFECYCLE_VERSION = "lifecycle_v1"
 ADD_ONLY = "add-only"

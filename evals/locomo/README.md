@@ -343,6 +343,19 @@ extracted with.
 conversation always run in order, since each depends on the entities before it.
 A new prompt version is a new cache key, so its results sit beside the old ones.
 
+**`extract_v2`.** [`extract_v2`](src/locomo_eval/prompts/extract_v2.txt) is
+the second add-only prompt (`--extract-prompt extract_v2`; the default stays
+`extract_v1`). `extract_v1` memories retrieve better than raw turns but answer
+worse, because the text often loses or changes the fact it cites. v2 makes
+exactness the first rule, with a worked example: the speaker's own specifics,
+no similar item swapped in, no list turned into a category. It also puts an
+absolute date in the text of every memory tied to a time, sets `occurred_at`
+to the event's own date (the start of a period, or null, never the session
+date by default), keeps reasons, feelings, frequencies and replies as memories
+of their own, discourages summary memories, and reuses an earlier entity id
+only for the same thing. The wording stays generic, and the same tests check
+it as v1.
+
 ### Scoring extracted memories (`--ingest extracted`)
 
 Once a conversation's extraction is cached, the retrieval run can ingest those
@@ -417,7 +430,7 @@ one stage under a time limit, and leaves `results/` as the version's output.
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
 3. Set `STAGE` and the models in the first cell (and, for `extract`,
-   `EXTRACT_PROMPT`: `extract_v1` or `lifecycle_v1`), then **Save Version ->
+   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2` or `lifecycle_v1`), then **Save Version ->
    Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
 
