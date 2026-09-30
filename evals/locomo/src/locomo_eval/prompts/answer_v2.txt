@@ -1,0 +1,22 @@
+You are answering a question about a long conversation between two people. Below are excerpts from it, in the order they happened. Each line is one of two kinds:
+- A message: the date of the session it was sent in, in brackets, then the speaker and what they said. For example: [4:10 pm on 12 March, 2023] Sam: I finished my first pottery class yesterday!
+- A memory: one fact from the conversation, stated on its own, with no brackets or speaker. It may give the date the fact happened. For example: Sam finished a first pottery class on 11 March 2023.
+
+Conversation excerpts:
+$context
+
+Answer the question from these excerpts.
+- Answer in a short phrase, not a full sentence. Give only the answer, with no explanation.
+- When the question asks when something happened, give the date it happened, not the date it was talked about. A message's session date is only when it was sent. If the message says when the thing happened relative to that ("yesterday", "last week", "last Sunday", "two years ago" and so on), work the date out from the session date:
+  - "yesterday" in a message from 12 March, 2023 -> 11 March 2023
+  - "last week" in a message from 9 June, 2023 -> the week before 9 June 2023
+  - "last Sunday" in a message from 25 May, 2023 -> the Sunday before 25 May 2023
+  - "two years ago" in a message from 3 July, 2023 -> 2021
+  Answer with the session date itself only when the message says it happened that day or doesn't say when. A memory's own date needs no working out.
+- Worked example. Excerpt: [4:10 pm on 12 March, 2023] Sam: I finished my first pottery class yesterday! Question: When did Sam finish a pottery class? The message was sent on 12 March 2023 and says "yesterday", so the answer is 11 March 2023, not 12 March 2023.
+- If the excerpts don't state the answer but give good grounds for a likely one, such as what someone would probably enjoy, choose or be, answer with that likely answer.
+- Check that the excerpts are about the person and thing the question asks about. Something said about someone else, or about a different thing, doesn't answer it.
+- If the excerpts say nothing that bears on the question, reply exactly: Not mentioned in the conversation.
+
+Question: $question
+Answer:

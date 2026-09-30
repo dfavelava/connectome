@@ -184,6 +184,19 @@ result's recorded version always names the exact text it ran with.
 - `answer_v1` shows the retrieved turns sorted by date, each prefixed with its
   session date, and the question. It asks for a short answer, or exactly
   `Not mentioned in the conversation.` when the turns don't contain it.
+- `answer_v2` (`--answer-prompt answer_v2`; the default stays `answer_v1`)
+  fixes what `answer_v1` gets wrong with an 8B model answering. It describes
+  both kinds of context: a turn (`[date] speaker: text`) and an extracted
+  memory (a fact on its own, with its own date), so `--ingest extracted` runs
+  are no longer scored with a prompt that doesn't describe their input. It
+  spells out the date arithmetic with examples and one worked example: a
+  message that says "yesterday", "last week" or "last Sunday" is answered with
+  the date worked out from the session date (`11 March 2023`, `the week
+  before 9 June 2023`), never the session date itself, which is what most
+  wrong `answer_v1` temporal answers were. And it lets the model answer with
+  a likely answer the excerpts support instead of abstaining, while checking
+  the excerpts are about the person and thing asked about, and abstaining
+  with the same exact text when they say nothing relevant.
 - `judge_v1` follows the Mem0/LoCoMo judge: given the question, gold answer
   and generated answer it returns `{"reasoning": ..., "label": "CORRECT" |
   "WRONG"}`, lenient on phrasing and date format, strict on facts. For
@@ -246,6 +259,13 @@ The printed table puts the retrieval and answer columns side by side, with
 version (default `answer_v1` / `judge_v1`); see
 [Answer and judge prompts](#answer-and-judge-prompts). A new version is a new
 config, so its scores sit beside the old ones.
+
+**Thinking.** `--answer-think` lets the answer model think before it answers
+(the judge's options are unchanged). Thinking tokens count against the output
+cap, so the answer call's `num_predict` is raised to 4096. It changes the
+config hash (the config records the answer call's options as
+`answer_options`), so compare its `usage.answer.seconds` per call against the
+accuracy gain over the same prompt without it.
 
 **Resuming.** Every finished stage call is appended to
 `results/<run-id>.<cfg-hash>.jsonl` and fsynced, keyed by question, stage,
@@ -430,7 +450,8 @@ one stage under a time limit, and leaves `results/` as the version's output.
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
 3. Set `STAGE` and the models in the first cell (and, for `extract`,
-   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2` or `lifecycle_v1`), then **Save Version ->
+   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2` or `lifecycle_v1`; for
+   `answer`, `RUN_ID`, `ANSWER_PROMPT`, `ANSWER_K` and `ANSWER_THINK`), then **Save Version ->
    Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
 
