@@ -81,6 +81,10 @@ LIFECYCLE_VERSION = "lifecycle_v1"
 # Lifecycle built on extract_v2: keeps every stored specific when superseding
 # or adding, prefers adding to merging and supersedes only what is no longer true.
 LIFECYCLE_V2_VERSION = "lifecycle_v2"
+# lifecycle_v2 with every worthwhile message accounted for (a memory or a
+# duplicate), duplicates only when nothing is new, and events dated with their
+# own date in words instead of "As of" the session date.
+LIFECYCLE_V3_VERSION = "lifecycle_v3"
 ADD_ONLY = "add-only"
 LIFECYCLE = "lifecycle"
 EXTRACT = "extract"
