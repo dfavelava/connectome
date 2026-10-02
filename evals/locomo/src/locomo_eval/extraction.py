@@ -59,7 +59,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from locomo_eval.dataset import Turn, load_dataset, normalize_evidence
+from locomo_eval.dataset import Turn, load_dataset, normalize_evidence, sample_ids
 from locomo_eval.llm import (
     LLMClient,
     LLMError,
@@ -919,7 +919,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="locomo-eval extract", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH, help="path to locomo10.json (default: %(default)s)")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="JSONL cache of extracted sessions (default: %(default)s)")
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to extract (default: all)")
+    parser.add_argument("--samples", type=sample_ids, help="comma-separated sample ids to extract (default: all)")
     parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="provider:model that extracts (default: %(default)s)")
     parser.add_argument(
         "--extract-prompt",

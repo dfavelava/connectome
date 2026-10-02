@@ -30,7 +30,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from locomo_eval.dataset import CATEGORY_NAMES
+from locomo_eval.dataset import CATEGORY_NAMES, sample_ids
 from locomo_eval.prompts import CORRECT, JUDGE_LABELS, WRONG
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -166,7 +166,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument("--draw", action="store_true", help="write a labelling sheet to --out")
     parser.add_argument("--out", type=Path, help="with --draw: where to write the sheet")
     parser.add_argument("--config", help="with --draw: the answers config (cfg hash) to draw from; needed when the run has several")
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="with --draw: comma-separated sample ids to draw from (default: all scored)")
+    parser.add_argument("--samples", type=sample_ids, help="with --draw: comma-separated sample ids to draw from (default: all scored)")
     default_weights = ",".join(f"{k}={v}" for k, v in DEFAULT_WEIGHTS.items())
     parser.add_argument("--weights", type=parse_weights, default=DEFAULT_WEIGHTS, help=f"with --draw: questions per category (default: {default_weights})")
     parser.add_argument("--seed", type=int, default=0, help="with --draw: random seed (default: %(default)s)")

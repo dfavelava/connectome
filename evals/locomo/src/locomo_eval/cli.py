@@ -38,7 +38,7 @@ from connectomeclient import ConnectomeClient
 from dotenv import load_dotenv
 
 from locomo_eval import answering, extraction, judge_labels
-from locomo_eval.dataset import Sample, Turn, load_dataset
+from locomo_eval.dataset import Sample, Turn, load_dataset, sample_ids
 from locomo_eval.extraction import (
     DEFAULT_CACHE_PATH,
     DEFAULT_EXTRACTOR_MODEL,
@@ -540,7 +540,7 @@ def print_memory_stats(stats: dict[str, dict[str, float | int]], label: str = ""
 def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH, help="path to locomo10.json (default: %(default)s)")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where a run's files live (default: %(default)s)")
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids (default: all)")
+    parser.add_argument("--samples", type=sample_ids, help="comma-separated sample ids (default: all)")
     parser.add_argument("--timeout", type=float, default=60.0, help="per-request timeout in seconds (default: %(default)s)")
 
 

@@ -1,4 +1,11 @@
-from locomo_eval.dataset import normalize_evidence, parse_sample, parse_session_date
+import pytest
+
+from locomo_eval.dataset import (
+    normalize_evidence,
+    parse_sample,
+    parse_session_date,
+    sample_ids,
+)
 
 RAW_SAMPLE = {
     "sample_id": "conv-1",
@@ -52,3 +59,8 @@ def test_parse_sample():
     assert [q.adversarial_answer for q in sample.qa] == [None, "x", None]
     assert sample.qa[1].evidence == ("D1:2", "D2:1")
     assert sample.qa[2].evidence == ()
+
+
+@pytest.mark.parametrize("value", ["conv-26,conv-30", "conv-26, conv-30", " conv-26 ,conv-30,"])
+def test_sample_ids_ignores_spaces_and_empty_parts(value):
+    assert sample_ids(value) == ["conv-26", "conv-30"]
