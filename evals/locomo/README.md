@@ -550,7 +550,7 @@ one stage under a time limit, and leaves `results/` as the version's output.
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
 3. Set `STAGE` and the models in the first cell (and, for `extract`,
-   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2` or `lifecycle_v1`; for
+   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2`, `lifecycle_v1`, `lifecycle_v2` or `lifecycle_v3`; for
    `answer`, `RUN_ID`, `ANSWER_PROMPT`, `ANSWER_K` and `ANSWER_THINK`), then **Save Version ->
    Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
@@ -634,3 +634,39 @@ records `ingestion.extraction.variant`, its `recall` settings, the
 `duplicates` and `superseded` totals, and `chunking.superseded`. The answer
 stage (`locomo-eval answer <run-id>`) scores each run the same way, so the
 temporal category's judge accuracy can be compared as well.
+
+**`lifecycle_v2`.** On all 10 conversations `lifecycle_v1` scored below
+add-only `extract_v1` (judge accuracy excluding adversarial 0.265 against
+0.322), mostly because its memories drop the detail a question needs: a date,
+a list's items, the actual reply, or a fact folded into a merged summary.
+[`lifecycle_v2`](src/locomo_eval/prompts/lifecycle_v2.txt)
+(`--extract-prompt lifecycle_v2`) starts from `extract_v2`'s rules instead of
+`extract_v1`'s, word for word, and adds to them:
+
+- a memory that supersedes or adds to a stored one keeps every date, name,
+  list item and quantity of both, and never generalizes a dated event;
+- new details are written as a memory of their own, not merged with the
+  stored memory into a combined summary;
+- a stored memory is superseded only when it is no longer true; one the new
+  memory would only restate is listed under `duplicates`;
+- a memory cites the few turns it comes from, not a whole session.
+
+Its fair baseline is an add-only `extract_v2` run with the same extractor
+model.
+
+**`lifecycle_v3`.** On all 10 conversations `lifecycle_v2` stopped verbatim
+supersedes and many-turn memories, but stored the gold answer no more often
+than `lifecycle_v1` (37.7% of non-adversarial questions against 38.0%; add-only
+44.3%). It cited the evidence turns as often as add-only in the first session,
+when nothing is stored yet, but only 70% of them from the sixth session on: it
+skipped messages it judged already stored and listed them nowhere. It also began
+every memory "As of <session date>", often as `2023-10-04`, dating events by
+when they were mentioned. [`lifecycle_v3`](src/locomo_eval/prompts/lifecycle_v3.txt)
+(`--extract-prompt lifecycle_v3`) keeps v2 and changes three things:
+
+- every message worth remembering must be cited by a new memory or listed in
+  a duplicate, and a stored memory on the same topic is no reason to skip one;
+- a stored memory is a duplicate only when it already states every specific
+  of the message;
+- an event is dated with its own date, in words ("on 3 October 2023"), with a
+  worked example; "As of" is kept for ongoing states.

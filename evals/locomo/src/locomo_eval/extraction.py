@@ -59,7 +59,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from locomo_eval.dataset import Turn, load_dataset, normalize_evidence
+from locomo_eval.dataset import Turn, load_dataset, normalize_evidence, sample_ids
 from locomo_eval.llm import (
     LLMClient,
     LLMError,
@@ -78,6 +78,13 @@ EXTRACT_VERSION = "extract_v1"
 EXTRACT_V2_VERSION = "extract_v2"
 # Prompts named lifecycle_v<N> select the lifecycle variant; see is_lifecycle.
 LIFECYCLE_VERSION = "lifecycle_v1"
+# Lifecycle built on extract_v2: keeps every stored specific when superseding
+# or adding, prefers adding to merging and supersedes only what is no longer true.
+LIFECYCLE_V2_VERSION = "lifecycle_v2"
+# lifecycle_v2 with every worthwhile message accounted for (a memory or a
+# duplicate), duplicates only when nothing is new, and events dated with their
+# own date in words instead of "As of" the session date.
+LIFECYCLE_V3_VERSION = "lifecycle_v3"
 ADD_ONLY = "add-only"
 LIFECYCLE = "lifecycle"
 EXTRACT = "extract"
@@ -912,7 +919,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="locomo-eval extract", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA_PATH, help="path to locomo10.json (default: %(default)s)")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="JSONL cache of extracted sessions (default: %(default)s)")
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to extract (default: all)")
+    parser.add_argument("--samples", type=sample_ids, help="comma-separated sample ids to extract (default: all)")
     parser.add_argument("--extractor-model", default=DEFAULT_EXTRACTOR_MODEL, help="provider:model that extracts (default: %(default)s)")
     parser.add_argument(
         "--extract-prompt",

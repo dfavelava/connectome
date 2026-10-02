@@ -135,6 +135,11 @@ def _optional_str(value: object) -> str | None:
     return None if value is None else str(value)
 
 
+def sample_ids(value: str) -> list[str]:
+    """A --samples value: comma-separated ids, spaces around them ignored."""
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def load_dataset(path: Path) -> list[Sample]:
     with path.open(encoding="utf-8") as f:
         raw = json.load(f)

@@ -38,7 +38,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from locomo_eval.dataset import CATEGORY_NAMES
+from locomo_eval.dataset import CATEGORY_NAMES, sample_ids
 from locomo_eval.llm import (
     Completion,
     LLMClient,
@@ -457,7 +457,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--answer-think", action="store_true", help="let the answer model think before answering; slower, and a separate config")
     parser.add_argument("--answer-k", type=int, help="contexts shown to the answer model (default: the retrieval run's answer_k)")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where the run's files live (default: %(default)s)")
-    parser.add_argument("--samples", type=lambda s: s.split(","), help="comma-separated sample ids to score (default: all in the run)")
+    parser.add_argument("--samples", type=sample_ids, help="comma-separated sample ids to score (default: all in the run)")
     parser.add_argument("--limit", type=int, help="score only the first N questions, for a quick check")
     parser.add_argument("--concurrency", type=int, default=1, help="LLM calls in flight; local Ollama serves one at a time unless OLLAMA_NUM_PARALLEL is set (default: %(default)s)")
     parser.add_argument("--timeout", type=float, default=600.0, help="per-call timeout in seconds (default: %(default)s)")

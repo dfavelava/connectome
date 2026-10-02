@@ -18,6 +18,8 @@ from locomo_eval.extraction import (
     EXTRACTION_SCHEMA,
     FAILED,
     LIFECYCLE_SCHEMA,
+    LIFECYCLE_V2_VERSION,
+    LIFECYCLE_V3_VERSION,
     LIFECYCLE_VERSION,
     OK,
     Duplicate,
@@ -86,7 +88,8 @@ class FakeLLM:
             item = self.script.pop(0)
             return item if isinstance(item, Completion) else Completion(item, 1000, 100)
         first = re.search(r"^(D\d+:\d+) ", user, re.MULTILINE).group(1)
-        text = reply(
+        make = lifecycle_reply if format == LIFECYCLE_SCHEMA else reply
+        text = make(
             [memory(f"Caroline spoke in {first}.", sources=[first], entities=["caroline"])],
             [{"id": "caroline", "name": "Caroline", "kind": "person"}],
         )
@@ -136,7 +139,7 @@ def test_extract_prompt_is_committed_and_generic(version):
     assert "question" not in lowered
 
 
-@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION])
+@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
 def test_no_question_text_reaches_any_prompt(tmp_path, version):
     llm = FakeLLM()
     cache = ExtractionCache(tmp_path / "cache.jsonl")
@@ -473,23 +476,48 @@ def stored(id_, content, occurred_at=None):
     return {"id": id_, "content": content, "occurred_at": occurred_at}
 
 
-def test_lifecycle_prompt_is_committed_and_generic():
-    prompt = load_prompt(LIFECYCLE_VERSION)
+@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
+def test_lifecycle_prompt_is_committed_and_generic(version):
+    prompt = load_prompt(version)
     assert extraction.is_lifecycle(prompt) and not extraction.is_lifecycle(load_prompt(EXTRACT_VERSION))
+    assert prompt.sha256 == hashlib.sha256((PROMPTS_DIR / f"{version}.txt").read_bytes()).hexdigest()
     lowered = prompt.text.lower()
     for name in CATEGORY_NAMES.values():
         assert name not in lowered
     assert "question" not in lowered
 
 
-def test_lifecycle_prompt_shows_recalled_memories_with_ids():
+@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
+def test_lifecycle_prompt_shows_recalled_memories_with_ids(version):
     session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[1]
-    prompt = load_prompt(LIFECYCLE_VERSION)
+    prompt = load_prompt(version)
     text = extraction_prompt(prompt, session, [], [stored("M1.1", "Caroline plans to join a support group.", "2023-05-08T00:00:00+00:00"), stored("M1.2", "Melanie likes sunsets.")])
     assert "M1.1 | 2023-05-08 | Caroline plans to join a support group." in text
     assert "M1.2 | - | Melanie likes sunsets." in text
     assert "$" not in text
     assert "Stored memories that may relate to this session (id | date | content):\n(none yet)" in extraction_prompt(prompt, session, [])
+
+
+def test_lifecycle_v2_keeps_extract_v2_rules():
+    v2 = load_prompt(LIFECYCLE_V2_VERSION).text
+    extract_v2 = load_prompt(EXTRACT_V2_VERSION).text
+    # The add-only rules carry over word for word, ahead of the lifecycle ones.
+    rules = extract_v2[extract_v2.index("1. Be exact."):extract_v2.index("4. One memory")]
+    assert rules in v2
+    assert extract_v2[extract_v2.index('- "occurred_at"'):extract_v2.index('- "entities": the ids')] in v2
+
+
+def test_lifecycle_v3_changes_only_dates_coverage_and_duplicates():
+    v3 = load_prompt(LIFECYCLE_V3_VERSION).text
+    extract_v2 = load_prompt(EXTRACT_V2_VERSION).text
+    # Exactness and the small-things rule carry over from extract_v2 word for word.
+    assert extract_v2[extract_v2.index("1. Be exact."):extract_v2.index("2. Put an absolute date")] in v3
+    assert extract_v2[extract_v2.index("3. Keep the small things"):extract_v2.index("4. One memory")] in v3
+    assert extract_v2[extract_v2.index('- "occurred_at"'):extract_v2.index('- "entities": the ids')] in v3
+    # Events take their own date, in words; every worthwhile message is a memory or a duplicate.
+    assert "never for an event" in v3 and "never as numbers" in v3
+    assert "Account for every message worth remembering" in v3
+    assert "only when it already states every specific" in v3
 
 
 def test_parse_lifecycle_reply_supersedes_and_duplicates():
