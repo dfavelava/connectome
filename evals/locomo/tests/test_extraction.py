@@ -20,6 +20,7 @@ from locomo_eval.extraction import (
     LIFECYCLE_SCHEMA,
     LIFECYCLE_V2_VERSION,
     LIFECYCLE_V3_VERSION,
+    LIFECYCLE_V4_VERSION,
     LIFECYCLE_VERSION,
     OK,
     Duplicate,
@@ -140,7 +141,7 @@ def test_extract_prompt_is_committed_and_generic(version):
     assert "question" not in lowered
 
 
-@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
+@pytest.mark.parametrize("version", [EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION, LIFECYCLE_V4_VERSION])
 def test_no_question_text_reaches_any_prompt(tmp_path, version):
     llm = FakeLLM()
     cache = ExtractionCache(tmp_path / "cache.jsonl")
@@ -477,7 +478,7 @@ def stored(id_, content, occurred_at=None):
     return {"id": id_, "content": content, "occurred_at": occurred_at}
 
 
-@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
+@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION, LIFECYCLE_V4_VERSION])
 def test_lifecycle_prompt_is_committed_and_generic(version):
     prompt = load_prompt(version)
     assert extraction.is_lifecycle(prompt) and not extraction.is_lifecycle(load_prompt(EXTRACT_VERSION))
@@ -488,7 +489,7 @@ def test_lifecycle_prompt_is_committed_and_generic(version):
     assert "question" not in lowered
 
 
-@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION])
+@pytest.mark.parametrize("version", [LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION, LIFECYCLE_V4_VERSION])
 def test_lifecycle_prompt_shows_recalled_memories_with_ids(version):
     session = sessions_of(SAMPLE.sample_id, SAMPLE.turns)[1]
     prompt = load_prompt(version)
@@ -519,6 +520,20 @@ def test_lifecycle_v3_changes_only_dates_coverage_and_duplicates():
     assert "never for an event" in v3 and "never as numbers" in v3
     assert "Account for every message worth remembering" in v3
     assert "only when it already states every specific" in v3
+
+
+def test_lifecycle_v4_changes_only_the_date_rule():
+    v4 = load_prompt(LIFECYCLE_V4_VERSION).text
+    v3 = load_prompt(LIFECYCLE_V3_VERSION).text
+    # Everything from rule 3 on carries over from lifecycle_v3, except the "As of" in rule 5's example.
+    v3_rest = v3[v3.index("3. Keep the small things"):]
+    assert v3_rest.replace("As of 20 June 2023, Tomás loves travelling and has been to Peru and Japan.", "Tomás loves travelling and has been to Peru and Japan (mentioned on 20 June 2023).") in v4
+    # Relative times are resolved, and "As of" appears only where the prompt forbids it or in a wrong example.
+    assert "Never leave a relative time in a memory" in v4 and "never start a memory with \"As of\"" in v4
+    for line in v4.splitlines():
+        if "As of" in line:
+            assert line.strip().startswith("Wrong:") or "never start a memory with" in line
+    assert "never as numbers" in v4
 
 
 def test_parse_lifecycle_reply_supersedes_and_duplicates():
