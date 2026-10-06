@@ -27,6 +27,7 @@ from locomo_eval.extraction import (
     ExtractionCache,
     ExtractionParseError,
     OllamaExtractor,
+    collapse_copies,
     extract_sample,
     extraction_prompt,
     load_extractions,
@@ -628,3 +629,112 @@ def test_superseded_memories_are_not_recalled_again(tmp_path):
     assert "M1.1 |" in llm.calls[1]["user"]
     assert "M1.1 |" not in llm.calls[2]["user"]
     assert "M2.1 | - | Caroline went to the LGBTQ support group." in llm.calls[2]["user"]
+
+
+# --- copies (lifecycle variant) -------------------------------------------------
+
+
+def session_record(session, memories, status=OK):
+    return {"session": session, "status": status, "memories": [{"source_dia_ids": [], **m, "supersedes": m.get("supersedes", [])} for m in memories]}
+
+
+def written(collapsed):
+    return [(m["id"], m["content"], m["supersedes"]) for m in collapsed.memories]
+
+
+def test_collapse_turns_a_verbatim_supersede_into_a_duplicate():
+    collapsed = collapse_copies(
+        [
+            session_record(1, [{"content": "Caroline volunteers at a youth center."}]),
+            session_record(2, [{"content": "caroline volunteers at a  youth center. ", "supersedes": ["M1.1"]}]),
+        ]
+    )
+    # The old memory keeps its sources and isn't superseded.
+    assert written(collapsed) == [("M1.1", "Caroline volunteers at a youth center.", [])]
+    assert (collapsed.verbatim_supersedes, collapsed.repeats, collapsed.superseded) == (1, 0, 0)
+
+
+def test_collapse_keeps_a_supersede_whose_text_changed():
+    collapsed = collapse_copies(
+        [
+            session_record(1, [{"content": "Caroline volunteers at a youth center."}]),
+            session_record(2, [{"content": "Caroline now runs the youth center.", "supersedes": ["M1.1"]}]),
+        ]
+    )
+    assert written(collapsed) == [("M1.1", "Caroline volunteers at a youth center.", []), ("M2.1", "Caroline now runs the youth center.", ["M1.1"])]
+    assert (collapsed.verbatim_supersedes, collapsed.repeats, collapsed.superseded) == (0, 0, 1)
+
+
+def test_collapse_drops_repeats_of_stored_and_same_reply_memories():
+    collapsed = collapse_copies(
+        [
+            session_record(1, [{"content": "Melanie likes sunsets."}, {"content": "Melanie paints."}, {"content": "MELANIE PAINTS."}]),
+            session_record(2, [{"content": "Melanie likes sunsets."}]),
+            session_record(3, [], status="failed"),
+        ]
+    )
+    assert written(collapsed) == [("M1.1", "Melanie likes sunsets.", []), ("M1.2", "Melanie paints.", [])]
+    assert (collapsed.verbatim_supersedes, collapsed.repeats, collapsed.superseded) == (0, 2, 0)
+
+
+def test_collapse_repeats_a_superseded_memory_only_once_it_is_gone():
+    collapsed = collapse_copies(
+        [
+            session_record(1, [{"content": "Caroline lives in Boston."}]),
+            session_record(2, [{"content": "Caroline moved to Denver.", "supersedes": ["M1.1"]}]),
+            # No longer current, so it is written again.
+            session_record(3, [{"content": "Caroline lives in Boston."}]),
+        ]
+    )
+    assert [m["id"] for m in collapsed.memories] == ["M1.1", "M2.1", "M3.1"]
+    assert (collapsed.repeats, collapsed.superseded) == (0, 1)
+
+
+def test_collapse_moves_a_copys_links_to_the_memory_it_copies():
+    collapsed = collapse_copies(
+        [
+            session_record(1, [{"content": "John got married."}, {"content": "John is engaged."}]),
+            # A copy of M1.1 that also supersedes M1.2: M1.1 supersedes it instead.
+            session_record(2, [{"content": "John got married.", "supersedes": ["M1.1", "M1.2"]}, {"content": "John got married."}]),
+            # Later references to the copy go to M1.1.
+            session_record(3, [{"content": "John and his wife renewed their vows.", "supersedes": ["M2.1"]}, {"content": "John danced.", "supersedes": ["M2.2"]}]),
+        ]
+    )
+    assert written(collapsed) == [
+        ("M1.1", "John got married.", ["M1.2"]),
+        ("M1.2", "John is engaged.", []),
+        ("M3.1", "John and his wife renewed their vows.", ["M1.1"]),
+        # M1.1 is already superseded.
+        ("M3.2", "John danced.", []),
+    ]
+    assert (collapsed.verbatim_supersedes, collapsed.repeats, collapsed.superseded) == (1, 1, 2)
+
+
+def test_lifecycle_counts_copies_without_changing_recall(tmp_path):
+    llm = FakeLLM(
+        [
+            lifecycle_reply([memory("Caroline says hey to Mel.", sources=["D1:1"]), memory("Melanie shared a photo of a sunset.", sources=["D1:2"])]),
+            lifecycle_reply(
+                [
+                    {**memory("Caroline says hey to Mel.", sources=["D2:1"]), "supersedes": ["M1.1"]},
+                    memory("Melanie shared a photo of a sunset.", sources=["D2:2"]),
+                ]
+            ),
+        ]
+    )
+    raw = copy.deepcopy(RAW)
+    raw["conversation"]["session_2"] = [
+        {"speaker": "Caroline", "dia_id": "D2:1", "text": "Hey Mel, I'm back."},
+        {"speaker": "Melanie", "dia_id": "D2:2", "text": "Another sunset photo!"},
+    ]
+    turns = parse_sample(raw).turns
+    path = tmp_path / "c.jsonl"
+    tally = run(extract_sample(OllamaExtractor(llm, MODEL, load_prompt(LIFECYCLE_VERSION)), ExtractionCache(path), DATASET_SHA, "conv-1", turns))
+    assert (tally.memories, tally.verbatim_supersedes, tally.repeats, tally.superseded) == (4, 1, 1, 0)
+    # The cache keeps the reply as extracted.
+    assert json.loads(path.read_text().splitlines()[1])["memories"][0]["supersedes"] == ["M1.1"]
+
+    loaded = extraction.cached_run(ExtractionCache(path), DATASET_SHA, [("conv-1", turns)], MODEL, load_prompt(LIFECYCLE_VERSION))
+    assert [m["id"] for m in loaded.memories("conv-1")] == ["M1.1", "M1.2"]
+    totals = loaded.config["totals"]
+    assert (totals["memories"], totals["verbatim_supersedes"], totals["repeats"], totals["superseded"]) == (4, 1, 1, 0)

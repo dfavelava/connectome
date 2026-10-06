@@ -34,7 +34,11 @@ again, and a new memory can name the stored memories it `supersedes`. Only the
 recalled ids can be referenced; others are dropped and counted. The recall is
 deterministic and local, so extraction still needs no backend and the cache
 stays valid; RECALL_LIMIT and RECALL_PER_TURN are part of the variant, so
-changing them means a new prompt version.
+changing them means a new prompt version. When the records are applied -
+ingested, or counted in the extract output - copies are folded into the
+memory they copy (`collapse_copies`): a memory that supersedes one with the
+same text, or repeats a current memory, isn't written. The records themselves
+keep them, so recall during extraction is unchanged.
 
 Results are appended to a JSONL cache (fsynced per line), one record per
 session, keyed by dataset sha256, sample, session, extractor model, prompt
@@ -526,6 +530,83 @@ def after_record(stored: list[dict], record: dict) -> list[dict]:
     return [m for m in stored if m["id"] not in gone] + stored_memories(record)
 
 
+def normalize_content(text: str) -> str:
+    """Memory text compared for copies: case-folded, with runs of whitespace as one space."""
+    return " ".join(text.casefold().split())
+
+
+@dataclass(frozen=True)
+class Collapsed:
+    """A conversation's memories as they are written, once copies are folded
+    into the memory they copy (see collapse_copies)."""
+
+    # The memories to write, each with its id, in session order; `supersedes`
+    # holds only ids among them.
+    memories: list[dict]
+    # Memories not written because their text equals a memory they supersede...
+    verbatim_supersedes: int
+    # ...or a current memory, stored or earlier in the same reply.
+    repeats: int
+    # Memories superseded once copies are folded.
+    superseded: int
+
+
+def collapse_copies(records: Iterable[dict]) -> Collapsed:
+    """Fold a lifecycle extraction's copies into the memories they copy, as
+    its session records (in session order) are applied. The records are left
+    as they are, so a cache can be replayed without new LLM calls.
+
+    The extractor sometimes supersedes a memory with the same text, or writes
+    again what is already stored. A memory whose normalized text equals one it
+    supersedes becomes a duplicate of it, and that memory isn't superseded; one
+    equal to a current memory - stored and not superseded, or earlier in the
+    same reply - becomes a duplicate of that. Either way it isn't written, and
+    anything else it supersedes is superseded by the memory it copies. Later
+    references to a copy go to that memory too."""
+    kept: dict[str, dict] = {}
+    alias: dict[str, str] = {}
+    current: dict[str, str] = {}
+    gone: set[str] = set()
+    verbatim = repeats = 0
+
+    def supersede(old_id: str, new_id: str) -> None:
+        gone.add(old_id)
+        text = normalize_content(kept[old_id]["content"])
+        if current.get(text) == old_id:
+            del current[text]
+        kept[new_id]["supersedes"].append(old_id)
+
+    for record in records:
+        if record["status"] != OK:
+            continue
+        for memory in stored_memories(record):
+            targets: list[str] = []
+            for ref in memory.get("supersedes") or ():
+                ref = alias.get(ref, ref)
+                # An id no memory has can only come from a session re-extracted after its successor.
+                if ref in kept and ref not in gone and ref not in targets:
+                    targets.append(ref)
+            text = normalize_content(memory["content"])
+            match = next((t for t in targets if normalize_content(kept[t]["content"]) == text), None)
+            if match is not None:
+                verbatim += 1
+                targets.remove(match)
+            elif text in current:
+                repeats += 1
+                match = current[text]
+            if match is not None:
+                alias[memory["id"]] = match
+                for target in targets:
+                    if target != match:
+                        supersede(target, match)
+                continue
+            kept[memory["id"]] = {**memory, "supersedes": []}
+            current[text] = memory["id"]
+            for target in targets:
+                supersede(target, memory["id"])
+    return Collapsed(memories=list(kept.values()), verbatim_supersedes=verbatim, repeats=repeats, superseded=len(gone))
+
+
 # --- Extractors -------------------------------------------------------------
 
 
@@ -738,8 +819,12 @@ class SampleTally:
     cached: int = 0
     failed: list[int] = field(default_factory=list)
     memories: int = 0
-    # Lifecycle variant: stored memories repeated rather than written again, and replaced.
+    # Lifecycle variant: stored memories repeated rather than written again,
+    # copies folded into the memory they copy (see collapse_copies), and
+    # memories replaced once copies are folded.
     duplicates: int = 0
+    verbatim_supersedes: int = 0
+    repeats: int = 0
     superseded: int = 0
     dropped: dict[str, int] = field(default_factory=lambda: dict.fromkeys(DROP_REASONS, 0))
     input_tokens: int = 0
@@ -755,13 +840,17 @@ class SampleTally:
             self.extracted += 1
         self.memories += len(record["memories"])
         self.duplicates += len(record.get("duplicates") or ())
-        self.superseded += len(superseded_ids(record))
         for reason, count in record["dropped"].items():
             self.dropped[reason] = self.dropped.get(reason, 0) + count
         if not cached:
             self.input_tokens += record["input_tokens"]
             self.output_tokens += record["output_tokens"]
             self.seconds += record["seconds"]
+
+    def collapsed(self, collapsed: Collapsed) -> None:
+        self.verbatim_supersedes = collapsed.verbatim_supersedes
+        self.repeats = collapsed.repeats
+        self.superseded = collapsed.superseded
 
 
 async def extract_sample(
@@ -784,6 +873,7 @@ async def extract_sample(
     registry: dict[str, Entity] = {}
     lifecycle = is_lifecycle(extractor.prompt)
     stored: list[dict] = []
+    records: list[dict] = []
     for session in sessions_of(sample_id, turns):
         tally.sessions += 1
         record = cache.get(cache_key(dataset_sha256, sample_id, session.number, extractor))
@@ -795,10 +885,14 @@ async def extract_sample(
             record = session_record(dataset_sha256, session, extractor, known, result, model_digest, recalled)
             cache.append(record)
         merge_entities(registry, record["entities"])
+        # Recall sees the records as extracted, copies and all, so the cache stays valid.
         stored = after_record(stored, record)
+        records.append(record)
         tally.add(record, cached)
         if on_session:
             on_session(record, cached)
+    if lifecycle:
+        tally.collapsed(collapse_copies(records))
     return tally
 
 
@@ -833,9 +927,16 @@ class CachedRun:
     # What the run config records: the extractor config and totals.
     config: dict
 
+    @property
+    def lifecycle(self) -> bool:
+        return self.config.get("variant") == LIFECYCLE
+
     def memories(self, sample_id: str) -> list[dict]:
         """Every memory written, each with its id (see memory_id), in session order.
-        Superseded ones are included; their successors name them in `supersedes`."""
+        Superseded ones are included; their successors name them in `supersedes`.
+        For the lifecycle variant, copies are folded (see collapse_copies)."""
+        if self.lifecycle:
+            return collapse_copies(self.records[sample_id]).memories
         return [m for record in self.records[sample_id] for m in stored_memories(record)]
 
     def entity_ids(self, sample_id: str) -> set[str]:
@@ -874,6 +975,8 @@ def cached_run(
             (failed if session.number in failed_here else unextracted).setdefault(sample_id, []).append(session.number)
 
     every = [r for found in records.values() for r in found]
+    lifecycle = is_lifecycle(prompt)
+    collapsed = [collapse_copies(found) for found in records.values()] if lifecycle else []
     dropped = dict.fromkeys(DROP_REASONS, 0)
     for record in every:
         for reason, count in record["dropped"].items():
@@ -885,7 +988,7 @@ def cached_run(
         "prompt": prompt.config(),
         "variant": variant_of(prompt),
         "recall": {"limit": RECALL_LIMIT, "per_turn": RECALL_PER_TURN, "method": "bm25 over the conversation's current memories, one query per turn"}
-        if is_lifecycle(prompt)
+        if lifecycle
         else None,
         "options": asdict(options),
         "options_hash": options_hash(options),
@@ -894,9 +997,13 @@ def cached_run(
             "extracted_sessions": len(every),
             "failed_sessions": failed,
             "unextracted_sessions": unextracted,
+            # As extracted; for the lifecycle variant, verbatim supersedes and
+            # repeats aren't written, and superseded counts once they're folded.
             "memories": sum(len(r["memories"]) for r in every),
             "duplicates": sum(len(r.get("duplicates") or ()) for r in every),
-            "superseded": sum(len(superseded_ids(r)) for r in every),
+            "verbatim_supersedes": sum(c.verbatim_supersedes for c in collapsed) if lifecycle else None,
+            "repeats": sum(c.repeats for c in collapsed) if lifecycle else None,
+            "superseded": sum(c.superseded for c in collapsed) if lifecycle else 0,
             "attempts": sum(r["attempts"] for r in every),
             "input_tokens": sum(r["input_tokens"] for r in every),
             "output_tokens": sum(r["output_tokens"] for r in every),
@@ -908,10 +1015,10 @@ def cached_run(
 
 
 def print_tallies(tallies: list[SampleTally]) -> None:
-    columns = ("sessions", "extracted", "cached", "failed", "memories", "duplicates", "superseded", "dropped_ids", "in_tokens", "out_tokens", "seconds")
+    columns = ("sessions", "extracted", "cached", "failed", "memories", "duplicates", "verbatim", "repeats", "superseded", "dropped_ids", "in_tokens", "out_tokens", "seconds")
     print(f"{'sample':<10}" + "".join(f"{c:>12}" for c in columns))
     for t in tallies:
-        cells = (t.sessions, t.extracted, t.cached, len(t.failed), t.memories, t.duplicates, t.superseded, t.dropped["source_dia_ids"], t.input_tokens, t.output_tokens, f"{t.seconds:.0f}")
+        cells = (t.sessions, t.extracted, t.cached, len(t.failed), t.memories, t.duplicates, t.verbatim_supersedes, t.repeats, t.superseded, t.dropped["source_dia_ids"], t.input_tokens, t.output_tokens, f"{t.seconds:.0f}")
         print(f"{t.sample_id:<10}" + "".join(f"{c:>12}" for c in cells))
 
 
