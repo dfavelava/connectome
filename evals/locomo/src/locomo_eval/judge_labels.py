@@ -11,13 +11,15 @@ same answers is compared with it.
 config's questions, weighted by category (--weights), each with the question,
 gold answer, generated answer and an empty "label". The judge's label and
 reasoning are left out so labelling stays blind. Fill in each "label" (and
-optionally a "note"). Sheets quote LoCoMo questions and answers, which are
+optionally a "note"), and set "borderline" to true on an item whose label
+was a close call under the rules. Sheets quote LoCoMo questions and answers, which are
 CC BY-NC, so labels/*.jsonl is gitignored and they stay local.
 
 --labels reports, for every answer config in results/<run-id>.json, how
 often its judge agrees with the hand labels: agreement, false CORRECTs (the
 judge accepted an answer labelled WRONG), false WRONGs and null verdicts, per
-category and overall. A label only counts against a config that judged the
+category and overall, with agreement split between clear and borderline
+items. A label only counts against a config that judged the
 identical generated answer, so configs that rescore the same cached answers
 with another judge prompt are compared on the same items. Nothing calls an
 LLM.
@@ -37,7 +39,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_RESULTS_DIR = PROJECT_DIR / "results"
 # Weighted towards the categories where judge_v1 and token F1 disagree most.
 DEFAULT_WEIGHTS = {"multi-hop": 20, "temporal": 20, "single-hop": 10, "open-domain": 5, "adversarial": 5}
-SHEET_FIELDS = ("id", "category", "question", "gold", "answer", "label", "note")
+SHEET_FIELDS = ("id", "category", "question", "gold", "answer", "label", "borderline", "note")
 ADVERSARIAL_CATEGORY = CATEGORY_NAMES[5]
 
 
@@ -70,12 +72,13 @@ def draw_sheet(questions: list[dict], weights: dict[str, int], rng: random.Rando
     for category, count in weights.items():
         pool = by_category.get(category, [])
         chosen += rng.sample(pool, min(count, len(pool)))
-    return [{**{name: questions[i].get(name) for name in SHEET_FIELDS[:5]}, "label": None, "note": ""} for i in sorted(chosen)]
+    return [{**{name: questions[i].get(name) for name in SHEET_FIELDS[:5]}, "label": None, "borderline": False, "note": ""} for i in sorted(chosen)]
 
 
 def load_labels(path: Path) -> list[dict]:
     """A labelled sheet; every line needs an id, the generated answer it
-    labels and a label of CORRECT or WRONG."""
+    labels and a label of CORRECT or WRONG. "borderline" is optional and,
+    when present, true or false."""
     labels = []
     seen = set()
     with path.open(encoding="utf-8") as f:
@@ -88,6 +91,8 @@ def load_labels(path: Path) -> list[dict]:
                 raise LabelError(f"{where}: needs a string id and answer")
             if item.get("label") not in JUDGE_LABELS:
                 raise LabelError(f"{where}: label {item.get('label')!r} is not one of {', '.join(JUDGE_LABELS)}")
+            if not isinstance(item.get("borderline", False), bool):
+                raise LabelError(f"{where}: borderline {item['borderline']!r} is not true or false")
             if item["id"] in seen:
                 raise LabelError(f"{where}: {item['id']} is labelled twice")
             seen.add(item["id"])
@@ -96,14 +101,21 @@ def load_labels(path: Path) -> list[dict]:
 
 
 def _empty() -> dict[str, int]:
-    return {"n": 0, "agree": 0, "false_correct": 0, "false_wrong": 0, "judge_null": 0}
+    return {"n": 0, "agree": 0, "false_correct": 0, "false_wrong": 0, "judge_null": 0, "borderline": 0, "borderline_agree": 0, "borderline_null": 0}
+
+
+def _rate(agree: int, n: int, null: int) -> float | None:
+    verdicts = n - null
+    return agree / verdicts if verdicts else None
 
 
 def agreement(labels: list[dict], questions: list[dict]) -> dict[str, dict]:
     """Per category and overall: how many labelled items this config judged
     (same id and identical answer), how many verdicts match the hand label,
-    false CORRECTs, false WRONGs and null verdicts. `agreement` is over
-    non-null verdicts; `unmatched` counts labels whose answer this config
+    false CORRECTs, false WRONGs and null verdicts. `borderline*` count the
+    same for items labelled borderline. `agreement` is over non-null
+    verdicts, and `agreement_clear` / `agreement_borderline` split it by the
+    borderline flag; `unmatched` counts labels whose answer this config
     didn't judge."""
     judged = {q["id"]: q for q in questions}
     rows: dict[str, dict] = defaultdict(_empty)
@@ -114,21 +126,26 @@ def agreement(labels: list[dict], questions: list[dict]) -> dict[str, dict]:
             unmatched += 1
             continue
         verdict = question["judge_label"]
+        borderline = item.get("borderline", False)
         for name in (question["category"], "overall"):
             row = rows[name]
             row["n"] += 1
+            row["borderline"] += borderline
             if verdict is None:
                 row["judge_null"] += 1
+                row["borderline_null"] += borderline
             elif verdict == item["label"]:
                 row["agree"] += 1
+                row["borderline_agree"] += borderline
             elif verdict == CORRECT:
                 row["false_correct"] += 1
             elif verdict == WRONG:
                 row["false_wrong"] += 1
     ordered = {name: rows[name] for name in [*sorted(r for r in rows if r != "overall"), "overall"] if name in rows}
     for row in ordered.values():
-        verdicts = row["n"] - row["judge_null"]
-        row["agreement"] = row["agree"] / verdicts if verdicts else None
+        row["agreement"] = _rate(row["agree"], row["n"], row["judge_null"])
+        row["agreement_clear"] = _rate(row["agree"] - row["borderline_agree"], row["n"] - row["borderline"], row["judge_null"] - row["borderline_null"])
+        row["agreement_borderline"] = _rate(row["borderline_agree"], row["borderline"], row["borderline_null"])
     return {"rows": ordered, "matched": len(labels) - unmatched, "unmatched": unmatched}
 
 
@@ -151,10 +168,13 @@ def print_agreement(cfg_hash: str, config: dict, report: dict) -> None:
     print(f"  {report['matched']} labelled answers judged, {report['unmatched']} labels for other answers")
     if not report["matched"]:
         return
-    print(f"  {'category':<14}{'n':>5}{'agree':>8}{'false C':>9}{'false W':>9}{'null':>6}")
+    print(f"  {'category':<14}{'n':>5}{'agree':>8}{'false C':>9}{'false W':>9}{'null':>6}{'border':>8}{'clear':>8}{'b agree':>9}")
     for name, row in report["rows"].items():
-        rate = "-" if row["agreement"] is None else f"{row['agreement']:.3f}"
-        print(f"  {name:<14}{row['n']:>5}{rate:>8}{row['false_correct']:>9}{row['false_wrong']:>9}{row['judge_null']:>6}")
+        rates = ["-" if rate is None else f"{rate:.3f}" for rate in (row["agreement"], row["agreement_clear"], row["agreement_borderline"])]
+        print(
+            f"  {name:<14}{row['n']:>5}{rates[0]:>8}{row['false_correct']:>9}{row['false_wrong']:>9}{row['judge_null']:>6}"
+            f"{row['borderline']:>8}{rates[1]:>8}{rates[2]:>9}"
+        )
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -209,6 +229,7 @@ def main(argv: list[str] | None = None) -> None:
     except (LabelError, json.JSONDecodeError) as exc:
         sys.exit(str(exc))
     hand = hand_label_summary(labels)
-    print(f"{len(labels)} hand labels in {args.labels}; hand-labelled accuracy: " + ", ".join(f"{k} {v['accuracy']:.3f} ({v['n']})" for k, v in hand.items()))
+    borderline = sum(item.get("borderline", False) for item in labels)
+    print(f"{len(labels)} hand labels ({borderline} borderline) in {args.labels}; hand-labelled accuracy: " + ", ".join(f"{k} {v['accuracy']:.3f} ({v['n']})" for k, v in hand.items()))
     for cfg_hash, entry in answers.items():
         print_agreement(cfg_hash, entry["config"], agreement(labels, entry["questions"]))

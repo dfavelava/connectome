@@ -65,8 +65,8 @@ def test_draw_sheet_is_weighted_seeded_and_blind():
     assert [item["id"] for item in sheet] == ["conv-26#0", "conv-26#1", "conv-26#4", "conv-26#5"]
     assert sheet == draw_sheet(QUESTIONS, {"multi-hop": 2, "adversarial": 5, "open-domain": 3}, random.Random(0), samples=["conv-26"])
     for item in sheet:
-        assert list(item) == ["id", "category", "question", "gold", "answer", "label", "note"]
-        assert item["label"] is None
+        assert list(item) == ["id", "category", "question", "gold", "answer", "label", "borderline", "note"]
+        assert item["label"] is None and item["borderline"] is False
     # Without a sample filter conv-30's question is in the pool too.
     assert len(draw_sheet(QUESTIONS, {"multi-hop": 3}, random.Random(0))) == 3
 
@@ -76,10 +76,28 @@ def test_agreement_counts_false_correct_and_false_wrong():
     assert (report["matched"], report["unmatched"]) == (6, 0)
     rows = report["rows"]
     assert list(rows) == ["adversarial", "multi-hop", "single-hop", "temporal", "overall"]
-    assert rows["multi-hop"] == {"n": 2, "agree": 1, "false_correct": 0, "false_wrong": 1, "judge_null": 0, "agreement": 0.5}
+    no_borderline = {"borderline": 0, "borderline_agree": 0, "borderline_null": 0, "agreement_borderline": None}
+    assert rows["multi-hop"] == {"n": 2, "agree": 1, "false_correct": 0, "false_wrong": 1, "judge_null": 0, "agreement": 0.5, "agreement_clear": 0.5, **no_borderline}
     # The judge accepted the trap answer, and gave no verdict on the abstention.
-    assert rows["adversarial"] == {"n": 2, "agree": 0, "false_correct": 1, "false_wrong": 0, "judge_null": 1, "agreement": 0.0}
+    assert rows["adversarial"] == {"n": 2, "agree": 0, "false_correct": 1, "false_wrong": 0, "judge_null": 1, "agreement": 0.0, "agreement_clear": 0.0, **no_borderline}
     assert rows["overall"]["agreement"] == pytest.approx(2 / 5)
+
+
+def test_agreement_splits_clear_and_borderline_items():
+    # The judge disagrees on the two borderline items and gives no verdict on a third.
+    flagged = {"conv-26#0", "conv-26#2", "conv-26#5"}
+    labels = [{**item, "borderline": item["id"] in flagged} for item in LABELS]
+    rows = agreement(labels, QUESTIONS)["rows"]
+    overall = rows["overall"]
+    assert (overall["borderline"], overall["borderline_agree"], overall["borderline_null"]) == (3, 0, 1)
+    assert overall["agreement_borderline"] == 0.0
+    assert overall["agreement_clear"] == pytest.approx(2 / 3)
+    assert overall["agreement"] == pytest.approx(2 / 5)
+    # Every multi-hop item that isn't borderline agrees; temporal has only a borderline one.
+    assert (rows["multi-hop"]["agreement_clear"], rows["multi-hop"]["agreement_borderline"]) == (1.0, 0.0)
+    assert (rows["temporal"]["agreement_clear"], rows["temporal"]["agreement_borderline"]) == (None, 0.0)
+    # Only a borderline item without a verdict leaves no borderline rate.
+    assert rows["adversarial"]["agreement_borderline"] is None
 
 
 def test_agreement_only_counts_the_labelled_answer():
@@ -106,11 +124,18 @@ def write_jsonl(path, items):
         ({"id": "q", "answer": "a", "label": None}, "label"),
         ({"id": "q", "answer": "a", "label": "correct"}, "label"),
         ({"id": "q", "label": "CORRECT"}, "answer"),
+        ({"id": "q", "answer": "a", "label": "CORRECT", "borderline": "yes"}, "borderline"),
+        ({"id": "q", "answer": "a", "label": "CORRECT", "borderline": 1}, "borderline"),
     ],
 )
 def test_load_labels_rejects_unlabelled_items(tmp_path, item, error):
     with pytest.raises(LabelError, match=error):
         load_labels(write_jsonl(tmp_path / "labels.jsonl", [item]))
+
+
+def test_load_labels_accepts_sheets_with_and_without_borderline(tmp_path):
+    items = [LABELS[0], {**LABELS[1], "borderline": True}, {**LABELS[2], "borderline": False}]
+    assert load_labels(write_jsonl(tmp_path / "labels.jsonl", items)) == items
 
 
 def test_load_labels_rejects_duplicates(tmp_path):
@@ -142,11 +167,12 @@ def test_cli_draws_a_sheet_and_reports_agreement(tmp_path, capsys):
     with pytest.raises(SystemExit, match="never overwritten"):
         cli.main(argv)
 
-    labels = write_jsonl(tmp_path / "labels.jsonl", LABELS)
+    labels = write_jsonl(tmp_path / "labels.jsonl", [{**LABELS[0], "borderline": True}, *LABELS[1:]])
     capsys.readouterr()
     cli.main(["judge-agreement", "base", "--results-dir", str(tmp_path), "--labels", str(labels)])
     out = capsys.readouterr().out
-    assert "6 hand labels" in out
+    assert "6 hand labels (1 borderline)" in out
+    assert "border" in out and "b agree" in out
     assert "aaaaaaaaaaaa: judge ollama:j judge_v1" in out and "bbbbbbbbbbbb: judge ollama:j judge_v2" in out
     assert "6 labelled answers judged" in out
 

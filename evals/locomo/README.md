@@ -381,7 +381,8 @@ scored a run with a hand-labelled sample, offline:
 # 1. Draw a labelling sheet from one answer config (weighted towards multi-hop and temporal).
 uv run locomo-eval judge-agreement <run-id> --draw --config <cfg-hash> \
   --samples conv-26 --out labels/judge-<run-id>-conv-26.jsonl
-# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules).
+# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules);
+#    set "borderline": true on close calls. labels/labeller.html does this in a browser.
 # 3. Rescore with the other judge prompt (reuses the cached answers), then compare.
 uv run locomo-eval answer <run-id> ... --judge-prompt judge_v2
 uv run locomo-eval judge-agreement <run-id> --labels labels/judge-<run-id>-conv-26.jsonl
@@ -393,7 +394,11 @@ questions per category (default `multi-hop=20,temporal=20,single-hop=10,
 open-domain=5,adversarial=5`) and `--seed` the draw. The report gives, per
 answer config and category, the agreement with the hand labels, false
 CORRECTs (the judge accepted an answer labelled WRONG), false WRONGs and null
-verdicts. A label only counts against a config that judged the identical
+verdicts. Labels stay binary; an item that was a close call under the rules
+is marked `"borderline": true` while labelling, and the report splits
+agreement between clear and borderline items (`clear`, `b agree`), so a judge
+that misses clear items can be told apart from rules that leave hard items
+open. A label only counts against a config that judged the identical
 answer, so configs that differ only in the judge are compared on the same
 items. Sheets quote LoCoMo questions and answers, which are CC BY-NC, so
 they are kept out of git: `labels/*.jsonl` is gitignored (see
