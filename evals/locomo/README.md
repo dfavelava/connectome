@@ -382,7 +382,7 @@ scored a run with a hand-labelled sample, offline:
 uv run locomo-eval judge-agreement <run-id> --draw --config <cfg-hash> \
   --samples conv-26 --out labels/judge-<run-id>-conv-26.jsonl
 # 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules);
-#    set "borderline": true on close calls.
+#    set "borderline": true on close calls. labels/labeller.html does this in a browser.
 # 3. Rescore with the other judge prompt (reuses the cached answers), then compare.
 uv run locomo-eval answer <run-id> ... --judge-prompt judge_v2
 uv run locomo-eval judge-agreement <run-id> --labels labels/judge-<run-id>-conv-26.jsonl

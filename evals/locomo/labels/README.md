@@ -14,6 +14,14 @@ clear and borderline items, which tells a judge that misses clear cases from
 rules that leave hard cases open. Sheets without the field count every item
 as clear.
 
+[`labeller.html`](labeller.html) is a small page for labelling a sheet: open
+it in a browser (straight from disk, no server), open the sheet, and label it
+with `C` / `W`, flag close calls with `B` and write a note with `N`. It shows
+the question, gold answer and generated answer, never a verdict, and keeps
+every other field of a line as it is. Chromium-based browsers save the sheet
+back in place as you go; elsewhere Save downloads the labelled copy to move
+over the original. The sheet never leaves the browser.
+
 The sheets quote LoCoMo questions and answers, which are CC BY-NC, so
 `*.jsonl` here is gitignored: keep them local, next to the run's results.
 

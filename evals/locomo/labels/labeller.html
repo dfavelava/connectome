@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Judge Label Sheet</title>
+<!--
+  Labels a sheet drawn with `locomo-eval judge-agreement <run-id> --draw`.
+  Open this file in a browser and open a sheet; nothing leaves the browser.
+  In Chromium-based browsers the sheet is saved back in place; elsewhere
+  "Save" downloads the labelled copy. Every field of a line is kept as is,
+  except "label", "borderline" and "note".
+-->
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --border: #dedcd5; --text: #1f1e1b;
+    --muted: #6b6960; --accent: #3b5bdb; --correct: #2b8a3e; --correct-bg: #e6f4ea;
+    --wrong: #c92a2a; --wrong-bg: #fdecec; --border-flag: #b35c00; --border-bg: #fff3e0;
+    --focus: #3b5bdb55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --surface: #1f1f1c; --border: #34332e; --text: #ecebe6;
+      --muted: #9c9a90; --accent: #8ea4ff; --correct: #69db7c; --correct-bg: #1d3324;
+      --wrong: #ff8787; --wrong-bg: #3a1f1f; --border-flag: #ffb35c; --border-bg: #3a2a15;
+      --focus: #8ea4ff55;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614; --surface: #1f1f1c; --border: #34332e; --text: #ecebe6;
+    --muted: #9c9a90; --accent: #8ea4ff; --correct: #69db7c; --correct-bg: #1d3324;
+    --wrong: #ff8787; --wrong-bg: #3a1f1f; --border-flag: #ffb35c; --border-bg: #3a2a15;
+    --focus: #8ea4ff55;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  button, select, textarea, input { font: inherit; color: inherit; }
+  button {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  select { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; } }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+  kbd {
+    font: 12px ui-monospace, monospace; border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted);
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+    position: sticky; top: 0; z-index: 1;
+  }
+  header h1 { font-size: 16px; margin: 0; }
+  #file { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  #status { margin-left: auto; font-size: 13px; color: var(--muted); }
+  #status.dirty { color: var(--border-flag); }
+  .actions { display: flex; gap: 8px; }
+  .progress { height: 4px; background: var(--border); }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  main { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } #list { max-height: 220px; } }
+  #sidebar { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  #counts { font-size: 13px; color: var(--muted); }
+  #list {
+    list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: calc(100vh - 190px);
+    border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  }
+  #list li {
+    display: flex; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer;
+    border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  #list li:last-child { border-bottom: 0; }
+  #list li.current { background: var(--bg); box-shadow: inset 3px 0 var(--accent); }
+  #list .lid { font-family: ui-monospace, monospace; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .cat { font-size: 11px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--muted); flex: none; }
+  .dot.CORRECT { background: var(--correct); border-color: var(--correct); }
+  .dot.WRONG { background: var(--wrong); border-color: var(--wrong); }
+  .flag { color: var(--border-flag); font-size: 12px; }
+  #card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; min-width: 0;
+  }
+  .meta { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+  .meta .id { font-family: ui-monospace, monospace; }
+  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; }
+  .field { margin-top: 16px; }
+  .field h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
+  .field p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #question { font-size: 17px; }
+  #answer { font-size: 17px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 0 6px 6px 0; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .labels { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; align-items: center; }
+  .labels button { padding: 10px 18px; font-weight: 600; min-width: 130px; }
+  #btn-correct[aria-pressed="true"] { background: var(--correct-bg); border-color: var(--correct); color: var(--correct); }
+  #btn-wrong[aria-pressed="true"] { background: var(--wrong-bg); border-color: var(--wrong); color: var(--wrong); }
+  #btn-border[aria-pressed="true"] { background: var(--border-bg); border-color: var(--border-flag); color: var(--border-flag); }
+  .labels button kbd { margin-left: 6px; }
+  textarea {
+    width: 100%; min-height: 64px; resize: vertical; margin-top: 4px; padding: 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .prefixes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .prefixes button { font-size: 12px; padding: 2px 8px; }
+  .nav { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+  details { margin-top: 20px; font-size: 14px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details ul { padding-left: 20px; margin: 8px 0; }
+  .keys { color: var(--muted); font-size: 13px; }
+  #empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  #empty.drag { outline: 2px dashed var(--accent); border-radius: 10px; }
+  #error { color: var(--wrong); white-space: pre-wrap; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Judge label sheet</h1>
+  <span id="file"></span>
+  <span id="status"></span>
+  <div class="actions">
+    <button id="open">Open sheet…</button>
+    <button id="save" disabled title="Ctrl/Cmd+S">Save</button>
+  </div>
+  <input id="picker" type="file" accept=".jsonl,application/jsonl,text/plain" hidden>
+</header>
+<div class="progress"><div id="bar"></div></div>
+
+<section id="empty">
+  <p>Open a sheet drawn with <code>locomo-eval judge-agreement &lt;run-id&gt; --draw</code>, or drop it here.</p>
+  <p class="hint">The sheet stays in this browser. Label blind, under <code>judge_v2</code>'s rules.</p>
+  <p id="error"></p>
+</section>
+
+<main id="app" hidden>
+  <aside id="sidebar">
+    <select id="filter" aria-label="Show">
+      <option value="all">All items</option>
+      <option value="unlabelled">Unlabelled</option>
+      <option value="borderline">Borderline</option>
+    </select>
+    <div id="counts"></div>
+    <ul id="list"></ul>
+  </aside>
+
+  <section id="card">
+    <div class="meta">
+      <span class="chip" id="category"></span>
+      <span class="id" id="item-id"></span>
+      <span id="position"></span>
+    </div>
+    <div class="field"><h2>Question</h2><p id="question"></p></div>
+    <div class="field"><h2>Gold answer</h2><p id="gold"></p><p class="hint" id="gold-hint" hidden>Adversarial: only an answer that says the information isn't available is CORRECT.</p></div>
+    <div class="field"><h2>Generated answer</h2><p id="answer"></p></div>
+
+    <div class="labels">
+      <button id="btn-correct" aria-pressed="false">CORRECT<kbd>C</kbd></button>
+      <button id="btn-wrong" aria-pressed="false">WRONG<kbd>W</kbd></button>
+      <button id="btn-border" aria-pressed="false" title="A close call under the rules">Borderline<kbd>B</kbd></button>
+    </div>
+
+    <div class="field">
+      <h2><label for="note">Note</label> <kbd>N</kbd></h2>
+      <textarea id="note" placeholder="Why, e.g. list: 1/3 gold items, nothing contradicts"></textarea>
+      <div class="prefixes" id="prefixes"></div>
+    </div>
+
+    <div class="nav">
+      <button id="prev">← Previous <kbd>K</kbd></button>
+      <button id="next">Next → <kbd>J</kbd></button>
+      <button id="next-unlabelled">Next unlabelled <kbd>U</kbd></button>
+    </div>
+
+    <details>
+      <summary>judge_v2 rules</summary>
+      <ul>
+        <li><b>Wording and date formats:</b> lenient. A relative date is CORRECT only if it points to the gold date or period.</li>
+        <li><b>Precision:</b> a date more specific than the gold is CORRECT inside the gold period, WRONG outside it.</li>
+        <li><b>Lists:</b> CORRECT with at least one gold item and nothing contradicting the gold; extra and missing items are fine. WRONG with no gold item.</li>
+        <li><b>Qualifiers:</b> the core fact without a gold detail is CORRECT, unless the question asks for that detail.</li>
+        <li><b>Facts:</b> a wrong name, place, number, date or item, or an added fact that contradicts the gold, is WRONG.</li>
+        <li><b>Adversarial</b> (gold "Not mentioned in the conversation."): only saying it isn't available is CORRECT; any specific answer is WRONG.</li>
+      </ul>
+      <p>Flag <b>borderline</b> while labelling when the rules leave the call open, and say why in the note. Never change a label after seeing a verdict.</p>
+    </details>
+    <p class="keys"><kbd>C</kbd>/<kbd>W</kbd> label · <kbd>B</kbd> borderline · <kbd>N</kbd> note (<kbd>Esc</kbd> to leave) · <kbd>J</kbd>/<kbd>K</kbd> or arrows move · <kbd>U</kbd> next unlabelled · <kbd>Ctrl/Cmd+S</kbd> save</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const LABELS = ["CORRECT", "WRONG"];
+  const PREFIXES = ["date: ", "list: ", "qualifier: ", "wrong fact: ", "adversarial: ", "wording: "];
+  const NOT_MENTIONED = "Not mentioned in the conversation.";
+  const $ = (id) => document.getElementById(id);
+
+  let items = [];        // parsed lines, original key order kept
+  let name = "";
+  let handle = null;     // FileSystemFileHandle when the browser can write in place
+  let current = 0;
+  let dirty = false;
+  let saveTimer = null;
+
+  function parseSheet(text) {
+    const parsed = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return;
+      let item;
+      try { item = JSON.parse(line); } catch (e) { throw new Error(`line ${i + 1}: not JSON (${e.message})`); }
+      if (typeof item !== "object" || item === null || typeof item.id !== "string") throw new Error(`line ${i + 1}: needs a string "id"`);
+      parsed.push(item);
+    });
+    if (!parsed.length) throw new Error("the sheet has no items");
+    return parsed;
+  }
+
+  // Keeps each line's keys in order, with "borderline" right after "label"
+  // (sheets drawn before the field existed don't have it).
+  function serialize() {
+    return items.map((item) => {
+      const out = {};
+      for (const [key, value] of Object.entries(item)) {
+        if (key === "borderline") continue;
+        out[key] = value;
+        if (key === "label") out.borderline = item.borderline === true;
+      }
+      if (!("note" in out)) out.note = "";
+      return JSON.stringify(out);
+    }).join("\n") + "\n";
+  }
+
+  function unlabelledNote() {
+    const open = items.filter((item) => !LABELS.includes(item.label)).length;
+    return open ? `; ${open} unlabelled, which judge-agreement rejects` : "";
+  }
+
+  async function load(text, fileName, fileHandle) {
+    try {
+      items = parseSheet(text);
+    } catch (e) {
+      $("error").textContent = `Couldn't read ${fileName}: ${e.message}`;
+      return;
+    }
+    name = fileName;
+    handle = fileHandle;
+    $("error").textContent = "";
+    $("empty").hidden = true;
+    $("app").hidden = false;
+    $("file").textContent = name;
+    const firstOpen = items.findIndex((item) => !LABELS.includes(item.label));
+    current = firstOpen === -1 ? 0 : firstOpen;
+    setDirty(false);
+    render();
+  }
+
+  // Asks for write access while the user's click still counts as a gesture,
+  // so later saves can write in place; without it Save downloads a copy.
+  async function writable(fileHandle) {
+    if (!fileHandle?.requestPermission) return null;
+    try {
+      return (await fileHandle.requestPermission({ mode: "readwrite" })) === "granted" ? fileHandle : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function openSheet() {
+    if (dirty && !confirm("Discard unsaved labels?")) return;
+    if (window.showOpenFilePicker) {
+      try {
+        const [fileHandle] = await window.showOpenFilePicker({ types: [{ description: "Label sheet", accept: { "text/plain": [".jsonl"] } }] });
+        const file = await fileHandle.getFile();
+        await load(await file.text(), file.name, await writable(fileHandle));
+      } catch (e) {
+        if (e.name !== "AbortError") $("error").textContent = e.message;
+      }
+    } else {
+      $("picker").click();
+    }
+  }
+
+  async function save() {
+    if (!items.length) return;
+    clearTimeout(saveTimer);
+    const text = serialize();
+    if (handle) {
+      try {
+        if ((await handle.queryPermission({ mode: "readwrite" })) !== "granted") throw new Error("no write permission");
+        const writable = await handle.createWritable();
+        await writable.write(text);
+        await writable.close();
+        setDirty(false, `Saved to ${name}${unlabelledNote()}`);
+        return;
+      } catch (e) {
+        handle = null;
+        setDirty(true, `Can't write in place (${e.message}); Save downloads a copy`);
+        return;
+      }
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([text], { type: "application/jsonl" }));
+    link.download = name || "labels.jsonl";
+    link.click();
+    URL.revokeObjectURL(link.href);
+    setDirty(false, `Downloaded ${link.download}; move it over the original sheet${unlabelledNote()}`);
+  }
+
+  function setDirty(value, message) {
+    dirty = value;
+    $("save").disabled = !items.length;
+    const status = $("status");
+    status.classList.toggle("dirty", value);
+    status.textContent = message || (value ? (handle ? "Saving…" : "Unsaved changes") : (handle ? "Saved in place" : "No unsaved changes"));
+  }
+
+  function changed() {
+    setDirty(true);
+    // Writes in place shortly after each change; a download waits for Save.
+    if (handle) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(save, 600);
+    }
+    renderList();
+    renderCounts();
+  }
+
+  function visible() {
+    const filter = $("filter").value;
+    return items.map((item, index) => ({ item, index })).filter(({ item }) =>
+      filter === "all" ||
+      (filter === "unlabelled" && !LABELS.includes(item.label)) ||
+      (filter === "borderline" && item.borderline === true));
+  }
+
+  function renderList() {
+    const list = $("list");
+    list.replaceChildren(...visible().map(({ item, index }) => {
+      const li = document.createElement("li");
+      li.className = index === current ? "current" : "";
+      const dot = document.createElement("span");
+      dot.className = `dot ${LABELS.includes(item.label) ? item.label : ""}`;
+      dot.title = item.label || "unlabelled";
+      const id = document.createElement("span");
+      id.className = "lid";
+      id.textContent = item.id;
+      const cat = document.createElement("span");
+      cat.className = "cat";
+      cat.textContent = item.category || "";
+      li.append(dot, id, cat);
+      if (item.borderline === true) {
+        const flag = document.createElement("span");
+        flag.className = "flag";
+        flag.textContent = "◆";
+        flag.title = "borderline";
+        li.append(flag);
+      }
+      li.addEventListener("click", () => go(index));
+      return li;
+    }));
+    list.querySelector(".current")?.scrollIntoView({ block: "nearest" });
+  }
+
+  function renderCounts() {
+    const labelled = items.filter((item) => LABELS.includes(item.label)).length;
+    const correct = items.filter((item) => item.label === "CORRECT").length;
+    const borderline = items.filter((item) => item.borderline === true).length;
+    $("counts").textContent = `${labelled}/${items.length} labelled · ${correct} correct · ${borderline} borderline`;
+    $("bar").style.width = `${(100 * labelled) / items.length}%`;
+  }
+
+  function render() {
+    const item = items[current];
+    $("category").textContent = item.category || "?";
+    $("item-id").textContent = item.id;
+    $("position").textContent = `${current + 1} of ${items.length}`;
+    $("question").textContent = item.question ?? "";
+    $("gold").textContent = item.gold ?? "";
+    $("gold-hint").hidden = !(item.category === "adversarial" || item.gold === NOT_MENTIONED);
+    $("answer").textContent = item.answer ?? "";
+    $("btn-correct").setAttribute("aria-pressed", item.label === "CORRECT");
+    $("btn-wrong").setAttribute("aria-pressed", item.label === "WRONG");
+    $("btn-border").setAttribute("aria-pressed", item.borderline === true);
+    $("note").value = item.note ?? "";
+    $("prev").disabled = current === 0;
+    $("next").disabled = current === items.length - 1;
+    renderList();
+    renderCounts();
+  }
+
+  function go(index) {
+    current = Math.max(0, Math.min(items.length - 1, index));
+    render();
+  }
+
+  function setLabel(value) {
+    const item = items[current];
+    item.label = item.label === value ? null : value;
+    render();
+    changed();
+  }
+
+  function toggleBorderline() {
+    items[current].borderline = items[current].borderline !== true;
+    render();
+    changed();
+  }
+
+  function nextUnlabelled() {
+    for (let step = 1; step <= items.length; step++) {
+      const index = (current + step) % items.length;
+      if (!LABELS.includes(items[index].label)) return go(index);
+    }
+  }
+
+  $("open").addEventListener("click", openSheet);
+  $("save").addEventListener("click", save);
+  $("picker").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (file) await load(await file.text(), file.name, null);
+    event.target.value = "";
+  });
+  $("btn-correct").addEventListener("click", () => setLabel("CORRECT"));
+  $("btn-wrong").addEventListener("click", () => setLabel("WRONG"));
+  $("btn-border").addEventListener("click", toggleBorderline);
+  $("prev").addEventListener("click", () => go(current - 1));
+  $("next").addEventListener("click", () => go(current + 1));
+  $("next-unlabelled").addEventListener("click", nextUnlabelled);
+  $("filter").addEventListener("change", renderList);
+  $("note").addEventListener("input", (event) => {
+    items[current].note = event.target.value;
+    changed();
+  });
+  $("prefixes").append(...PREFIXES.map((prefix) => {
+    const button = document.createElement("button");
+    button.textContent = prefix.trim();
+    button.addEventListener("click", () => {
+      const note = $("note");
+      if (!note.value.startsWith(prefix)) note.value = prefix + note.value;
+      items[current].note = note.value;
+      changed();
+      note.focus();
+      note.setSelectionRange(note.value.length, note.value.length);
+    });
+    return button;
+  }));
+
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      save();
+      return;
+    }
+    if (!items.length || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.matches("textarea, input, select")) {
+      if (event.key === "Escape") event.target.blur();
+      return;
+    }
+    const actions = {
+      c: () => setLabel("CORRECT"), w: () => setLabel("WRONG"), b: toggleBorderline,
+      j: () => go(current + 1), ArrowRight: () => go(current + 1), ArrowDown: () => go(current + 1),
+      k: () => go(current - 1), ArrowLeft: () => go(current - 1), ArrowUp: () => go(current - 1),
+      u: nextUnlabelled, n: () => $("note").focus(),
+    };
+    const action = actions[event.key.length === 1 ? event.key.toLowerCase() : event.key];
+    if (action) {
+      event.preventDefault();
+      action();
+    }
+  });
+
+  const empty = $("empty");
+  ["dragenter", "dragover"].forEach((type) => document.addEventListener(type, (event) => {
+    event.preventDefault();
+    empty.classList.add("drag");
+  }));
+  document.addEventListener("dragleave", () => empty.classList.remove("drag"));
+  document.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    empty.classList.remove("drag");
+    if (dirty && !confirm("Discard unsaved labels?")) return;
+    const entry = event.dataTransfer.items?.[0];
+    const fileHandle = entry?.getAsFileSystemHandle ? await entry.getAsFileSystemHandle().catch(() => null) : null;
+    const file = event.dataTransfer.files[0];
+    if (file) await load(await file.text(), file.name, fileHandle?.kind === "file" ? await writable(fileHandle) : null);
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if (dirty) event.preventDefault();
+  });
+})();
+</script>
+</body>
+</html>
