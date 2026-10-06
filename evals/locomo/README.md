@@ -550,7 +550,7 @@ one stage under a time limit, and leaves `results/` as the version's output.
    the dataset as an input. For a private repository, add a GitHub token as
    the secret `GITHUB_TOKEN`.
 3. Set `STAGE` and the models in the first cell (and, for `extract`,
-   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2`, `lifecycle_v1`, `lifecycle_v2` or `lifecycle_v3`; for
+   `EXTRACT_PROMPT`: `extract_v1`, `extract_v2`, `lifecycle_v1`, `lifecycle_v2`, `lifecycle_v3` or `lifecycle_v4`; for
    `answer`, `RUN_ID`, `ANSWER_PROMPT`, `ANSWER_K` and `ANSWER_THINK`), then **Save Version ->
    Save & Run All (Commit)**. The run continues with the browser closed.
 4. Download `results/` from the version's Output tab.
@@ -689,3 +689,24 @@ when they were mentioned. [`lifecycle_v3`](src/locomo_eval/prompts/lifecycle_v3.
   of the message;
 - an event is dated with its own date, in words ("on 3 October 2023"), with a
   worked example; "As of" is kept for ongoing states.
+
+**`lifecycle_v4`.** On conv-26 and conv-30 `lifecycle_v3` brought coverage
+back (gold in store 42.9% of non-adversarial questions, add-only 34.3%) but
+still answered below add-only (judge accuracy excluding adversarial 0.260
+against 0.299), with temporal the furthest behind (0.111 against 0.175). 71% of
+its memories still began "As of <session date>", and relative times were
+resolved no more often than with add-only, so a memory such as "As of 8 May
+2023, Caroline attended a LGBTQ support group on the previous day" led
+`answer_v1` to give the session date instead of the event's.
+[`lifecycle_v4`](src/locomo_eval/prompts/lifecycle_v4.txt)
+(`--extract-prompt lifecycle_v4`) keeps v3 and changes only the date rule:
+
+- no relative time ("yesterday", "the previous day", "next month", ...) may
+  be left in a memory, and the session date is never written beside the date
+  it was resolved to;
+- no memory starts with "As of": an event takes the day it happened or is
+  planned for, a vaguer time becomes a period ("the week before 4 October
+  2023"), and an ongoing state says when it began ("since about April 2023")
+  or ends with "(mentioned on <session date>)";
+- worked conversions for one session date, and wrong-and-right examples for
+  a past and a planned event; the examples in rules 1 and 5 lose their "As of".

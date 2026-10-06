@@ -89,6 +89,9 @@ LIFECYCLE_V2_VERSION = "lifecycle_v2"
 # duplicate), duplicates only when nothing is new, and events dated with their
 # own date in words instead of "As of" the session date.
 LIFECYCLE_V3_VERSION = "lifecycle_v3"
+# lifecycle_v3 with every relative time resolved to a date in the text, and
+# no "As of" the session date beside it.
+LIFECYCLE_V4_VERSION = "lifecycle_v4"
 ADD_ONLY = "add-only"
 LIFECYCLE = "lifecycle"
 EXTRACT = "extract"

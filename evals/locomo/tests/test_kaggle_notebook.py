@@ -6,6 +6,7 @@ from locomo_eval.extraction import (
     EXTRACT_VERSION,
     LIFECYCLE_V2_VERSION,
     LIFECYCLE_V3_VERSION,
+    LIFECYCLE_V4_VERSION,
     LIFECYCLE_VERSION,
 )
 from locomo_eval.prompts import (
@@ -50,7 +51,7 @@ def test_default_config_is_valid():
     assert all(config[name].count(":") == 1 for name in ("EXTRACTOR_MODEL", "ANSWER_MODEL", "JUDGE_MODEL"))
     assert config["REPO_REF"] == "main"
     assert config["EXTRACT_PROMPT"] == EXTRACT_VERSION
-    assert load_prompt(config["EXTRACT_PROMPT"]).version in (EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION)
+    assert load_prompt(config["EXTRACT_PROMPT"]).version in (EXTRACT_VERSION, EXTRACT_V2_VERSION, LIFECYCLE_VERSION, LIFECYCLE_V2_VERSION, LIFECYCLE_V3_VERSION, LIFECYCLE_V4_VERSION)
     assert config["ANSWER_PROMPT"] == ANSWER_VERSION
     assert load_prompt(config["ANSWER_PROMPT"]).version in (ANSWER_VERSION, ANSWER_V2_VERSION)
     assert config["JUDGE_PROMPT"] == JUDGE_VERSION
