@@ -599,7 +599,25 @@ one both superseded and repeated are dropped and counted under
 recall is local and deterministic rather than a call to the backend's
 `recall`, so extraction still needs no backend and a cached session stays
 valid; changing the recall limits means a new prompt version. The extract
-table gains `duplicates` and `superseded` columns (always 0 for add-only).
+table gains `duplicates`, `verbatim`, `repeats` and `superseded` columns
+(always 0 for add-only).
+
+**Copies.** The extractor sometimes supersedes a memory with one of exactly
+the same text, where it should have listed a duplicate, or writes again a
+memory that is already stored. When the records are applied, copies are
+folded into the memory they copy (normalized text: case and whitespace
+ignored):
+
+- a memory whose text equals one it supersedes is a *verbatim supersede*: it
+  isn't written, and the old memory isn't superseded;
+- a memory whose text equals a current memory - stored and not superseded,
+  or earlier in the same reply - is a *repeat* and isn't written either.
+
+Anything else a copy supersedes is superseded by the memory it copies, and
+later references to a copy go to that memory. Like a duplicate, a copy's
+turns are cited by nothing. The cache records keep the copies, and recall
+during extraction sees them as extracted, so an existing cache is reused
+as is. `superseded` counts what is superseded once copies are folded.
 
 **Scoring.** `--ingest extracted --extract-prompt lifecycle_v1` ingests it
 like any extraction. Every memory is written, then each superseded one is
@@ -631,7 +649,8 @@ With `--compare`, each category shows this run, the baseline, and a `diff`
 row (this run minus the baseline). Runs are labelled by what they ingested,
 e.g. `extracted: add-only` or `extracted: lifecycle, forget`. The config
 records `ingestion.extraction.variant`, its `recall` settings, the
-`duplicates` and `superseded` totals, and `chunking.superseded`. The answer
+`duplicates`, `verbatim_supersedes`, `repeats` and `superseded` totals, and
+`chunking.superseded`. The answer
 stage (`locomo-eval answer <run-id>`) scores each run the same way, so the
 temporal category's judge accuracy can be compared as well.
 

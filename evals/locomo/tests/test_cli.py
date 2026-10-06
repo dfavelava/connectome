@@ -450,6 +450,29 @@ def test_lifecycle_ingestion_can_forget_superseded_memories(client, tmp_path):
     assert sorted(key_maps["conv-1"].values()) == [(), ("D1:2",), ("D2:1",)]
 
 
+def test_lifecycle_ingestion_folds_copies(client, tmp_path):
+    """Session 2 supersedes M1.1 with the same text and repeats M1.2, so neither is written and M1.1 isn't forgotten."""
+    sample = parse_sample(RAW_SAMPLE)
+    session_2 = [
+        {**extracted_memory(SESSION_1[0]["content"].upper(), ["D2:1"]), "supersedes": ["M1.1"]},
+        {**extracted_memory(SESSION_1[1]["content"], ["D2:1"]), "supersedes": []},
+    ]
+    records = [
+        extraction_record("d" * 64, 1, [{**m, "supersedes": []} for m in SESSION_1], entities=["caroline", "melanie"], prompt_version=LIFECYCLE_VERSION),
+        extraction_record("d" * 64, 2, session_2, prompt_version=LIFECYCLE_VERSION),
+    ]
+    path = tmp_path / "extractions.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    extracted = cached_run(ExtractionCache(path), "d" * 64, [(sample.sample_id, sample.turns)], EXTRACTOR, load_prompt(LIFECYCLE_VERSION))
+    totals = extracted.config["totals"]
+    assert (totals["memories"], totals["verbatim_supersedes"], totals["repeats"], totals["superseded"]) == (5, 1, 1, 0)
+
+    _, _, key_maps = run(client, args(ingest="extracted", superseded="forget"), [sample], "l3", extracted=extracted)
+    assert [c["content"] for c in client.remember_calls] == [m["content"] for m in SESSION_1]
+    assert client.forgotten == [] and client.superseded == []
+    assert sorted(key_maps["conv-1"].values()) == [(), ("D1:1", "D1:2"), ("D1:2",)]
+
+
 def test_add_only_ingestion_supersedes_nothing(client, tmp_path):
     sample = parse_sample(RAW_SAMPLE)
     run(client, args(ingest="extracted", superseded="forget"), [sample], "a1", extracted=cached(tmp_path, sample))
@@ -476,7 +499,7 @@ def test_main_compares_lifecycle_with_add_only(tmp_path, monkeypatch, capsys):
     assert config["ingestion"]["extraction"]["variant"] == "lifecycle"
     assert config["ingestion"]["extraction"]["recall"]["limit"] > 0
     assert config["chunking"]["superseded"] == "forget"
-    assert "1 duplicates not written, 1 memories superseded (forget)" in captured.err
+    assert "1 duplicates, 0 verbatim supersedes and 0 repeats not written, 1 memories superseded (forget)" in captured.err
     out = captured.out
     assert "  life (extracted: lifecycle, forget)" in out and "  add (extracted: add-only)" in out
     # Session 2 failed in the add-only run, so only the lifecycle run covers D2:1.

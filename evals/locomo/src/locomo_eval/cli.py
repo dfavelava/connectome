@@ -675,7 +675,11 @@ def load_cached_run(args: argparse.Namespace, samples: list[Sample]) -> CachedRu
         sys.exit(f"{exc}; run `locomo-eval extract` with the same --samples, --extractor-model and --extract-prompt first")
     totals = extracted.config["totals"]
     if extracted.config["variant"] == extraction.LIFECYCLE:
-        print(f"lifecycle extraction: {totals['duplicates']} duplicates not written, {totals['superseded']} memories superseded ({args.superseded})", file=sys.stderr)
+        print(
+            f"lifecycle extraction: {totals['duplicates']} duplicates, {totals['verbatim_supersedes']} verbatim supersedes and {totals['repeats']} repeats not written, "
+            f"{totals['superseded']} memories superseded ({args.superseded})",
+            file=sys.stderr,
+        )
     if totals["failed_sessions"] or totals["unextracted_sessions"]:
         print(
             f"warning: sessions with no successful extraction are left out - failed: {totals['failed_sessions'] or 'none'}, "
