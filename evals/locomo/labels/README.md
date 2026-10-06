@@ -6,6 +6,14 @@ item per line with the `id`, `category`, `question`, `gold` answer, generated
 Items are labelled under `judge_v2`'s rules, without looking at any judge's
 verdict.
 
+Labels stay binary, like the judges' verdicts. When an item is a close call
+under the rules, still pick `CORRECT` or `WRONG`, set `"borderline": true`
+and say why in the `note`. Decide the flag while labelling, never after
+seeing a verdict. The report then splits each judge's agreement between
+clear and borderline items, which tells a judge that misses clear cases from
+rules that leave hard cases open. Sheets without the field count every item
+as clear.
+
 The sheets quote LoCoMo questions and answers, which are CC BY-NC, so
 `*.jsonl` here is gitignored: keep them local, next to the run's results.
 
