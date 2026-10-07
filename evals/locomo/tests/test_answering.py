@@ -23,6 +23,7 @@ from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
+    DEFAULT_JUDGE_VERSION,
     JUDGE_V2_VERSION,
     JUDGE_VERSION,
     NOT_MENTIONED,
@@ -390,10 +391,10 @@ def test_cli_answer_rescores_cached_answers_with_another_judge_prompt(tmp_path, 
     cli.main(base)
     cli.main([*base, "--judge-prompt", JUDGE_V2_VERSION])
 
-    # Only the verdicts are redone; the answers come from judge_v1's checkpoint.
+    # Only the verdicts are redone; the answers come from the default judge's checkpoint.
     assert clients[-1].stage_calls(ANSWER) == 0 and clients[-1].stage_calls(JUDGE) > 0
     entries = list(json.loads(path.read_text())["answers"].values())
-    assert sorted(e["config"]["judge_prompt"]["version"] for e in entries) == [JUDGE_VERSION, JUDGE_V2_VERSION]
+    assert sorted(e["config"]["judge_prompt"]["version"] for e in entries) == [JUDGE_V2_VERSION, DEFAULT_JUDGE_VERSION]
     assert [q["answer"] for q in entries[0]["questions"]] == [q["answer"] for q in entries[1]["questions"]]
 
 

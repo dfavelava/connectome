@@ -11,8 +11,10 @@ from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
+    DEFAULT_JUDGE_VERSION,
     JUDGE_SCHEMA,
     JUDGE_V2_VERSION,
+    JUDGE_V3_VERSION,
     JUDGE_VERSION,
     NOT_MENTIONED,
     PROMPTS_DIR,
@@ -29,7 +31,7 @@ from locomo_eval.prompts import (
 from locomo_eval.scoring import ADVERSARIAL, SINGLE_HOP
 
 
-@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION, JUDGE_VERSION, JUDGE_V2_VERSION])
+@pytest.mark.parametrize("version", [ANSWER_VERSION, ANSWER_V2_VERSION, JUDGE_VERSION, JUDGE_V2_VERSION, JUDGE_V3_VERSION])
 def test_load_committed_prompt(version):
     prompt = load_prompt(version)
     data = (PROMPTS_DIR / f"{version}.txt").read_bytes()
@@ -103,7 +105,7 @@ def test_judge_prompt_adversarial_question():
     assert f"Gold answer: {NOT_MENTIONED}\nTrap answer: a horse\nGenerated answer: A horse." in text
 
 
-@pytest.mark.parametrize("version", [JUDGE_VERSION, JUDGE_V2_VERSION])
+@pytest.mark.parametrize("version", [JUDGE_VERSION, JUDGE_V2_VERSION, JUDGE_V3_VERSION])
 def test_judge_prompt_fills_every_placeholder(version):
     text = judge_prompt(load_prompt(version), "What did she paint?", ADVERSARIAL, "A horse.", adversarial_answer="a horse")
     assert text.endswith(f"Question: What did she paint?\nGold answer: {NOT_MENTIONED}\nTrap answer: a horse\nGenerated answer: A horse.\n")
@@ -130,11 +132,44 @@ def test_judge_v2_keeps_the_strict_rules():
     assert "A date outside the gold period is WRONG." in text
 
 
-def test_judge_v2_is_generic():
-    lowered = load_prompt(JUDGE_V2_VERSION).text.lower()
+@pytest.mark.parametrize("version", [JUDGE_V2_VERSION, JUDGE_V3_VERSION])
+def test_judge_v2_and_v3_are_generic(version):
+    lowered = load_prompt(version).text.lower()
     # Made-up examples, so none of them is also an item being judged.
     for word in ("caroline", "melanie", "lgbtq", "transgender", *CATEGORY_NAMES.values()):
         assert word not in lowered
+
+
+def test_judge_v3_examples_are_valid_verdicts():
+    text = load_prompt(JUDGE_V3_VERSION).text
+    verdicts = [parse_judge_output(line) for line in text.splitlines() if line.startswith("{")]
+    # judge_v2's eight, a partial list with extra items, and two abstentions on
+    # questions the conversation answers (a fact and an inference).
+    assert len(verdicts) == 11
+    assert {v.label for v in verdicts} == {"CORRECT", "WRONG"}
+
+
+def test_judge_v3_is_judge_v2_plus_the_abstention_rule():
+    v2, v3 = load_prompt(JUDGE_V2_VERSION).text.splitlines(), load_prompt(JUDGE_V3_VERSION).text.splitlines()
+    # Every judge_v2 rule but the list rule is kept word for word, and so is every example.
+    rules_v2 = [line for line in v2 if line.startswith("- ")]
+    assert [line for line in rules_v2 if not line.startswith("- Be lenient on lists")] == [
+        line for line in v3 if line.startswith("- ") and not line.startswith(("- Be lenient on lists", "- If the gold answer is anything else"))
+    ]
+    list_rule_v2 = next(line for line in rules_v2 if line.startswith("- Be lenient on lists"))
+    list_rule_v3 = next(line for line in v3 if line.startswith("- Be lenient on lists"))
+    assert list_rule_v3 == list_rule_v2.replace(
+        "contradicts the gold answer. An answer that contains none",
+        "contradicts the gold answer, even when it adds items that are not in the gold answer. An answer that contains none",
+    )
+    assert all(line in v3 for line in v2 if line.startswith("{"))
+    text = "\n".join(v3)
+    assert "says the information is not available, not mentioned or unknown is then WRONG" in text
+    assert text.endswith(v2[-1])
+
+
+def test_default_judge_is_judge_v3():
+    assert DEFAULT_JUDGE_VERSION == JUDGE_V3_VERSION
 
 
 def test_judge_prompt_requires_gold_answer():

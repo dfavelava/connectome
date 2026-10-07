@@ -252,8 +252,9 @@ result's recorded version always names the exact text it ran with.
   a likely answer the excerpts support instead of abstaining, while checking
   the excerpts are about the person and thing asked about, and abstaining
   with the same exact text when they say nothing relevant.
-- `judge_v1` follows the Mem0/LoCoMo judge: given the question, gold answer
-  and generated answer it returns `{"reasoning": ..., "label": "CORRECT" |
+- `judge_v1` (`--judge-prompt judge_v1`; the default until `judge_v3`)
+  follows the Mem0/LoCoMo judge: given the question, gold answer and
+  generated answer it returns `{"reasoning": ..., "label": "CORRECT" |
   "WRONG"}`, lenient on phrasing and date format, strict on facts. For
   adversarial questions the gold answer is the abstention and the dataset's
   `adversarial_answer` is shown as a trap: only abstaining is CORRECT, and
@@ -261,7 +262,7 @@ result's recorded version always names the exact text it ran with.
   behind published numbers: a list with one extra or missing item, a date
   more specific than the gold one, or an answer without the gold's qualifier
   is WRONG, which hits multi-hop list questions hardest.
-- `judge_v2` (`--judge-prompt judge_v2`; the default stays `judge_v1`)
+- `judge_v2` (`--judge-prompt judge_v2`)
   aligns the leniency with the Mem0/LoCoMo judge, which accepts an answer on
   the same topic as the gold. A date more specific than the gold period
   is CORRECT when it falls within it (gold `July 2023`, answer `3 July 2023`),
@@ -273,6 +274,38 @@ result's recorded version always names the exact text it ran with.
   adversarial rule, the output format and the strict parsing are the same as
   in `judge_v1`. Its examples use a made-up person, so none of them is also
   an item being judged.
+- `judge_v3` (the default) is
+  `judge_v2` with two fixes found by checking it against 60 hand-labelled
+  conv-26 items from `turns-v2-full-k20` (#63). `judge_v2` agreed with the
+  labels on 0.917 of them against `judge_v1`'s 0.750, and multi-hop went
+  from 0.50 to 0.85, but on the full run it accepted 45 of the 285
+  non-adversarial "Not mentioned in the conversation." answers, against
+  `judge_v1`'s 14, reasoning that the answer "correctly states that the
+  information is not available". `judge_v3` adds a rule and two examples:
+  when the gold answer is a fact or an inference ("Likely yes"), an answer
+  that says the information isn't available is WRONG. Three of `judge_v2`'s
+  four false WRONGs were partial lists with extra items, which its rules
+  accept but none of its examples showed, so `judge_v3` says so in the list
+  rule and adds that example. Everything else is `judge_v2`, word for word.
+
+**Which judge to report.** `judge_v3` is the default, and later runs report
+it. On the same 60 hand-labelled items (labelled under `judge_v2`'s rules,
+which `judge_v3` only spells out further; 4 flagged borderline), rescoring
+the same cached answers:
+
+| judge | agreement | on clear items | false CORRECTs | false WRONGs | multi-hop | non-adversarial abstentions judged CORRECT (full run) |
+|---|---|---|---|---|---|---|
+| `judge_v1` | 0.750 | 0.768 | 0 | 15 | 0.500 | 14 of 285 |
+| `judge_v2` | 0.917 | 0.946 | 1 | 4 | 0.850 | 45 of 285 |
+| `judge_v3` | 0.967 | 0.982 | 0 | 2 | 0.950 | 1 of 285 |
+
+No judge accepted a trap answer on the 5 adversarial items. A sample of 60
+from one conversation is small, so the abstention count over the full run
+is the check that `judge_v3`'s leniency doesn't reach abstentions.
+Judge accuracy from before the switch was `judge_v1`'s; compare a run
+with an older one under the same judge, by rescoring the older run's cached
+answers with `--judge-prompt judge_v3` (or the newer one's with
+`--judge-prompt judge_v1`).
 
 The judge is a small local model, so its reply is constrained with Ollama
 structured outputs (`format` set to the verdict's JSON schema) and then
@@ -328,9 +361,12 @@ The printed table puts the retrieval and answer columns side by side, with
 `overall_excl_adversarial` before `overall`.
 
 **Prompt versions.** `--answer-prompt` / `--judge-prompt` select a prompt
-version (default `answer_v1` / `judge_v1`); see
+version (default `answer_v1` / `judge_v3`); see
 [Answer and judge prompts](#answer-and-judge-prompts). A new version is a new
-config, so its scores sit beside the old ones.
+config, so its scores sit beside the old ones. The default judge was
+`judge_v1` until `judge_v3`, so rerunning an older command without
+`--judge-prompt` now adds a `judge_v3` config next to its `judge_v1` one,
+reusing its cached answers.
 
 **Thinking.** `--answer-think` lets the answer model think before it answers
 (the judge's options are unchanged). Thinking tokens count against the output
@@ -381,10 +417,10 @@ scored a run with a hand-labelled sample, offline:
 # 1. Draw a labelling sheet from one answer config (weighted towards multi-hop and temporal).
 uv run locomo-eval judge-agreement <run-id> --draw --config <cfg-hash> \
   --samples conv-26 --out labels/judge-<run-id>-conv-26.jsonl
-# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v2's rules);
+# 2. Fill in each item's "label" (CORRECT or WRONG, under judge_v3's rules);
 #    set "borderline": true on close calls. labels/labeller.html does this in a browser.
 # 3. Rescore with the other judge prompt (reuses the cached answers), then compare.
-uv run locomo-eval answer <run-id> ... --judge-prompt judge_v2
+uv run locomo-eval answer <run-id> ... --judge-prompt judge_v1
 uv run locomo-eval judge-agreement <run-id> --labels labels/judge-<run-id>-conv-26.jsonl
 ```
 
