@@ -13,6 +13,7 @@ from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
     JUDGE_V2_VERSION,
+    JUDGE_V3_VERSION,
     JUDGE_VERSION,
     load_prompt,
 )
@@ -55,7 +56,7 @@ def test_default_config_is_valid():
     assert config["ANSWER_PROMPT"] == ANSWER_VERSION
     assert load_prompt(config["ANSWER_PROMPT"]).version in (ANSWER_VERSION, ANSWER_V2_VERSION)
     assert config["JUDGE_PROMPT"] == JUDGE_VERSION
-    assert load_prompt(config["JUDGE_PROMPT"]).version in (JUDGE_VERSION, JUDGE_V2_VERSION)
+    assert load_prompt(config["JUDGE_PROMPT"]).version in (JUDGE_VERSION, JUDGE_V2_VERSION, JUDGE_V3_VERSION)
     assert config["ANSWER_K"] is None and config["ANSWER_THINK"] is False
     assert 0 < config["TIME_LIMIT_HOURS"] < 12
     assert config["CONCURRENCY"] >= 1

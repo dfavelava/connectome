@@ -273,6 +273,19 @@ result's recorded version always names the exact text it ran with.
   adversarial rule, the output format and the strict parsing are the same as
   in `judge_v1`. Its examples use a made-up person, so none of them is also
   an item being judged.
+- `judge_v3` (`--judge-prompt judge_v3`; the default stays `judge_v1`) is
+  `judge_v2` with two fixes found by checking it against 60 hand-labelled
+  conv-26 items from `turns-v2-full-k20` (#63). `judge_v2` agreed with the
+  labels on 0.917 of them against `judge_v1`'s 0.750, and multi-hop went
+  from 0.50 to 0.85, but on the full run it accepted 45 of the 285
+  non-adversarial "Not mentioned in the conversation." answers, against
+  `judge_v1`'s 14, reasoning that the answer "correctly states that the
+  information is not available". `judge_v3` adds a rule and two examples:
+  when the gold answer is a fact or an inference ("Likely yes"), an answer
+  that says the information isn't available is WRONG. Three of `judge_v2`'s
+  four false WRONGs were partial lists with extra items, which its rules
+  accept but none of its examples showed, so `judge_v3` says so in the list
+  rule and adds that example. Everything else is `judge_v2`, word for word.
 
 The judge is a small local model, so its reply is constrained with Ollama
 structured outputs (`format` set to the verdict's JSON schema) and then

@@ -37,6 +37,10 @@ JUDGE_VERSION = "judge_v1"
 # period, on lists with extra or missing (but no contradicting) items and on a
 # left-out qualifier; as strict as judge_v1 on wrong facts and abstentions.
 JUDGE_V2_VERSION = "judge_v2"
+# judge_v2, plus: an abstention is WRONG whenever the gold answer is a fact or
+# an inference (judge_v2 accepted many), and a partial list with extra items is
+# CORRECT.
+JUDGE_V3_VERSION = "judge_v3"
 
 # What the answer prompt tells the model to say when the context lacks the
 # answer; it is also the gold answer the judge sees for adversarial questions.
