@@ -3,7 +3,7 @@
 Sheets drawn with `locomo-eval judge-agreement <run-id> --draw` go here, one
 item per line with the `id`, `category`, `question`, `gold` answer, generated
 `answer`, and a `label` of `CORRECT` or `WRONG` (plus an optional `note`).
-Items are labelled under `judge_v2`'s rules, without looking at any judge's
+Items are labelled under `judge_v3`'s rules, without looking at any judge's
 verdict.
 
 Labels stay binary, like the judges' verdicts. When an item is a close call

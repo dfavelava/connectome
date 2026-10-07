@@ -136,7 +136,7 @@
 
 <section id="empty">
   <p>Open a sheet drawn with <code>locomo-eval judge-agreement &lt;run-id&gt; --draw</code>, or drop it here.</p>
-  <p class="hint">The sheet stays in this browser. Label blind, under <code>judge_v2</code>'s rules.</p>
+  <p class="hint">The sheet stays in this browser. Label blind, under <code>judge_v3</code>'s rules.</p>
   <p id="error"></p>
 </section>
 
@@ -180,14 +180,15 @@
     </div>
 
     <details>
-      <summary>judge_v2 rules</summary>
+      <summary>judge_v3 rules</summary>
       <ul>
         <li><b>Wording and date formats:</b> lenient. A relative date is CORRECT only if it points to the gold date or period.</li>
         <li><b>Precision:</b> a date more specific than the gold is CORRECT inside the gold period, WRONG outside it.</li>
-        <li><b>Lists:</b> CORRECT with at least one gold item and nothing contradicting the gold; extra and missing items are fine. WRONG with no gold item.</li>
+        <li><b>Lists:</b> CORRECT with at least one gold item and nothing contradicting the gold; extra and missing items are fine, together too. WRONG with no gold item.</li>
         <li><b>Qualifiers:</b> the core fact without a gold detail is CORRECT, unless the question asks for that detail.</li>
         <li><b>Facts:</b> a wrong name, place, number, date or item, or an added fact that contradicts the gold, is WRONG.</li>
         <li><b>Adversarial</b> (gold "Not mentioned in the conversation."): only saying it isn't available is CORRECT; any specific answer is WRONG.</li>
+        <li><b>Abstentions</b> on any other question, including one whose gold answer is an inference ("Likely yes"), are WRONG.</li>
       </ul>
       <p>Flag <b>borderline</b> while labelling when the rules leave the call open, and say why in the note. Never change a label after seeing a verdict.</p>
     </details>

@@ -41,6 +41,9 @@ JUDGE_V2_VERSION = "judge_v2"
 # an inference (judge_v2 accepted many), and a partial list with extra items is
 # CORRECT.
 JUDGE_V3_VERSION = "judge_v3"
+# What `locomo-eval answer` judges with unless --judge-prompt says otherwise:
+# judge_v3 agreed best with the hand-labelled sample (#63).
+DEFAULT_JUDGE_VERSION = JUDGE_V3_VERSION
 
 # What the answer prompt tells the model to say when the context lacks the
 # answer; it is also the gold answer the judge sees for adversarial questions.

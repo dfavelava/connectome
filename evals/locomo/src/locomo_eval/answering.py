@@ -51,7 +51,7 @@ from locomo_eval.llm import (
 from locomo_eval.metrics import Context, QuestionResult, summarize, summarize_answers
 from locomo_eval.prompts import (
     ANSWER_VERSION,
-    JUDGE_VERSION,
+    DEFAULT_JUDGE_VERSION,
     NOT_MENTIONED,
     Prompt,
     answer_prompt,
@@ -453,7 +453,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--answer-model", required=True, help="provider:model that answers, e.g. ollama:qwen3:8b")
     parser.add_argument("--judge-model", required=True, help="provider:model that judges; ideally at least as large as the answer model and another family")
     parser.add_argument("--answer-prompt", default=ANSWER_VERSION, help="answer prompt version (default: %(default)s)")
-    parser.add_argument("--judge-prompt", default=JUDGE_VERSION, help="judge prompt version (default: %(default)s)")
+    parser.add_argument("--judge-prompt", default=DEFAULT_JUDGE_VERSION, help="judge prompt version (default: %(default)s)")
     parser.add_argument("--answer-think", action="store_true", help="let the answer model think before answering; slower, and a separate config")
     parser.add_argument("--answer-k", type=int, help="contexts shown to the answer model (default: the retrieval run's answer_k)")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="where the run's files live (default: %(default)s)")

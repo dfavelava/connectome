@@ -11,6 +11,7 @@ from locomo_eval.metrics import Context
 from locomo_eval.prompts import (
     ANSWER_V2_VERSION,
     ANSWER_VERSION,
+    DEFAULT_JUDGE_VERSION,
     JUDGE_SCHEMA,
     JUDGE_V2_VERSION,
     JUDGE_V3_VERSION,
@@ -165,6 +166,10 @@ def test_judge_v3_is_judge_v2_plus_the_abstention_rule():
     text = "\n".join(v3)
     assert "says the information is not available, not mentioned or unknown is then WRONG" in text
     assert text.endswith(v2[-1])
+
+
+def test_default_judge_is_judge_v3():
+    assert DEFAULT_JUDGE_VERSION == JUDGE_V3_VERSION
 
 
 def test_judge_prompt_requires_gold_answer():
