@@ -1,10 +1,6 @@
 package resources
 
-import (
-	"strings"
-
-	"gopkg.in/yaml.v3"
-)
+import "gopkg.in/yaml.v3"
 
 // HydrateMemoryDocument resolves read-time defaults for a memory document
 // written before a field existed, for read-path consumers - get_memory and
@@ -12,7 +8,8 @@ import (
 // current schema defines. A frontmatter with no acl key picks up this
 // instance's configured DEFAULT_ACL (see ResolveACL in acl.go); a
 // relationship written before `kind` existed defaults its kind to
-// defaultRelationshipKind (see relationshipPatch.go). This is
+// defaultRelationshipKind (see relationshipPatch.go); a 0.1 document reads as
+// 0.2, with `generated` derived from its `source` (see upgrade). This is
 // "default at read time, no frontmatter migration": the blob store is never
 // rewritten, and a document that already carries every field it needs is
 // returned byte-for-byte unchanged rather than reformatted. Content with no
@@ -29,7 +26,7 @@ func HydrateMemoryDocument(content string) string {
 		return content
 	}
 
-	changed := false
+	changed := fm.upgrade()
 	if fm.ACL == nil {
 		acl := ResolveACL(fm.ACL)
 		fm.ACL = &acl
@@ -45,10 +42,9 @@ func HydrateMemoryDocument(content string) string {
 		return content
 	}
 
-	hydratedYAML, err := yaml.Marshal(fm)
+	hydrated, err := fm.render(body)
 	if err != nil {
 		return content
 	}
-
-	return "---\n" + strings.TrimRight(string(hydratedYAML), "\n") + "\n---\n" + body
+	return hydrated
 }

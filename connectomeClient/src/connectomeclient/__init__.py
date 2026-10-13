@@ -20,6 +20,7 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime
+from importlib.metadata import version
 from io import BytesIO
 from typing import Literal, NotRequired, TypedDict, get_args
 from urllib.parse import quote
@@ -30,8 +31,13 @@ import yaml
 DEFAULT_API_BASE_URL = "http://localhost:8080/api/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_USER_AGENT = "connectomeclient/0.1.0"
-DEFAULT_SOURCE_TYPE = "api"
-MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
+# The default `generated.by` actor. Actors follow one convention:
+# `<producer>/<version>` for agents and tools, `human:<id>` for people,
+# `process:<id>` for jobs.
+DEFAULT_GENERATED_BY = f"connectomeclient/{version('connectomeclient')}"
+MEMORY_SCHEMA_VERSION = "connectome/memory/0.2"
+# The only older schema version upgrade_memory_metadata knows how to read.
+LEGACY_MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
 
 MemoryType = Literal["note", "fact", "preference", "event"]
 MEMORY_TYPES: tuple[str, ...] = get_args(MemoryType)
@@ -52,6 +58,40 @@ class Relationship(TypedDict):
     predicate: str
     objectEntityId: NotRequired[str | None]
     kind: NotRequired[RelationshipKind]
+
+
+class Source(TypedDict):
+    """Where a memory's content was extracted from, mirroring
+    connectomemcp.server's Source model (OKF's `sources` shape)."""
+
+    id: NotRequired[str]
+    resource: NotRequired[str]
+    title: NotRequired[str]
+
+
+def upgrade_memory_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    """Return memory frontmatter in the current schema's shape.
+
+    Mirrors connectomemcp.server.upgrade_memory_metadata: a 0.1 document
+    gains `generated` derived from its `source` block (by = source.type, at =
+    source.created_at) and loses `source`; a `verified` written as a bare
+    mapping becomes a one-element list. The backend already does this for
+    get_memory and hydrated recall, so this is for frontmatter read some
+    other way, such as straight from the blob store.
+    """
+    upgraded = dict(metadata)
+    if isinstance(upgraded.get("verified"), dict):
+        upgraded["verified"] = [upgraded["verified"]]
+    if upgraded.get("version") != LEGACY_MEMORY_SCHEMA_VERSION:
+        return upgraded
+    upgraded["version"] = MEMORY_SCHEMA_VERSION
+    source = upgraded.pop("source", None)
+    if "generated" not in upgraded and isinstance(source, dict):
+        upgraded["generated"] = {
+            "by": source.get("type"),
+            "at": source.get("created_at") or upgraded.get("created_at"),
+        }
+    return upgraded
 
 
 def entity_key(entity_id: str) -> str:
@@ -89,7 +129,8 @@ class ConnectomeClient:
         api_key: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         user_agent: str = DEFAULT_USER_AGENT,
-        source_type: str = DEFAULT_SOURCE_TYPE,
+        generated_by: str | None = None,
+        source_type: str | None = None,
         cf_access_client_id: str | None = None,
         cf_access_client_secret: str | None = None,
     ) -> None:
@@ -97,7 +138,10 @@ class ConnectomeClient:
         self.api_key = api_key or os.getenv("CONNECTOME_API_KEY") or os.getenv("DAYBID_API_KEY") or os.getenv("apikey")
         self.timeout = timeout
         self.user_agent = user_agent
-        self.source_type = source_type
+        # Recorded as generated.by on every memory this client writes.
+        # source_type is the 0.1 name for the same thing, kept so existing
+        # callers keep working; generated_by wins when both are given.
+        self.generated_by = generated_by or source_type or DEFAULT_GENERATED_BY
         # Cloudflare Access service-token credentials, for backends behind
         # Access; sent only when both halves are present.
         self.cf_access_client_id = cf_access_client_id or os.getenv("CF_ACCESS_CLIENT_ID")
@@ -148,6 +192,8 @@ class ConnectomeClient:
         tome: str | None = None,
         occurred_at: str | None = None,
         derived_from: str | None = None,
+        generated_by: str | None = None,
+        sources: list[Source] | None = None,
     ) -> dict[str, str]:
         """Write a memory document and return its key.
 
@@ -160,12 +206,22 @@ class ConnectomeClient:
         now). Omit when the event time is unknown or is simply now.
 
         derived_from is the key of another memory (e.g. 'mem_abc.md') this one
-        was derived from, such as the transcript chunk a fact was extracted
-        from.
+        is a facet of: one entity's own, diverging version of the root
+        memory's content. It is not extraction provenance - use sources for
+        that.
 
-        Both keys are always written, as null when omitted, and derived_from
-        lands after acl - matching connectomemcp.server.format_memory's
-        front matter for the same arguments."""
+        sources records what the memory was extracted from, such as the
+        transcript chunk a fact was drawn from: each entry has an optional id,
+        resource (a memory key or URL) and title.
+
+        generated_by overrides, for this memory only, the actor the client
+        was constructed with: '<producer>/<version>' for an agent or tool,
+        'human:<id>' for a person, 'process:<id>' for a job.
+
+        occurred_at and derived_from are always written, as null when
+        omitted, while sources is left out entirely when empty; key order
+        matches connectomemcp.server.format_memory's front matter for the
+        same arguments."""
         validate_occurred_at(occurred_at)
         memory_id = f"mem_{uuid.uuid4()}.md"
         now = datetime.now(UTC).isoformat()
@@ -175,7 +231,11 @@ class ConnectomeClient:
             "type": memory_type,
             "created_at": now,
             "occurred_at": occurred_at,
-            "source": {"type": self.source_type, "created_at": now},
+            "generated": {"by": generated_by or self.generated_by, "at": now},
+        }
+        if sources:
+            metadata["sources"] = [dict(source) for source in sources]
+        metadata |= {
             "entities": list(entities or []),
             "relationships": [dict(relationship) for relationship in (relationships or [])],
         }
@@ -306,6 +366,29 @@ class ConnectomeClient:
         if tome is not None:
             body["tome"] = tome
         response = await self._request("PATCH", "/memory/relationship", json_body=body)
+        return response.json()
+
+    async def verify(
+        self,
+        key: str,
+        by: str,
+        at: str | None = None,
+        tome: str | None = None,
+    ) -> dict[str, object]:
+        """Record that an actor confirmed an existing memory's content.
+
+        Appends {by, at} to the memory's verified list via the Go backend's
+        PATCH /memory/verified route, in place and without re-embedding,
+        mirroring connectomemcp.server.verify. by follows the actor
+        convention ('human:<id>', 'process:<id>', '<producer>/<version>'); at
+        is an RFC3339 timestamp and defaults to now.
+        """
+        body: dict[str, object] = {"key": key, "by": by}
+        if at is not None:
+            body["at"] = at
+        if tome is not None:
+            body["tome"] = tome
+        response = await self._request("PATCH", "/memory/verified", json_body=body)
         return response.json()
 
     async def get_memory(self, key: str, tome: str | None = None) -> dict[str, object]:

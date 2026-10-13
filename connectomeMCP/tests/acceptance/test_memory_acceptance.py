@@ -55,6 +55,8 @@ async def _remember_recall_supersede(tome: str) -> None:
             derived_from=None,
             tome=tome,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     sighting_key = sighting["key"]

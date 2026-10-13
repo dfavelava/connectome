@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"connectome-dev-service/middleware"
 
@@ -103,6 +104,16 @@ type SupersedeRelationshipRequest struct {
 	SupersededBy    *string `json:"superseded_by"`
 }
 
+// VerifyMemoryRequest names a memory and the actor confirming its content.
+// By follows the actor convention (`human:<id>`, `process:<id>`,
+// `<producer>/<version>`). At is optional RFC3339 and defaults to now.
+type VerifyMemoryRequest struct {
+	Key  string `json:"key"`
+	Tome string `json:"tome"`
+	By   string `json:"by"`
+	At   string `json:"at"`
+}
+
 // memoryFileReader adapts an in-memory byte slice to multipart.File so a
 // patched document can be written back through the same
 // MemoryManager.PutObject used by uploads, without a temp file.
@@ -139,6 +150,7 @@ func InitMemoryResource(r *gin.RouterGroup, manager managers.MemoryManager, embe
 	group.DELETE("/", resource.delete)
 	group.GET("/list", resource.list)
 	group.PATCH("/relationship", resource.supersedeRelationship)
+	group.PATCH("/verified", resource.verify)
 }
 
 func (resource *MemoryResourceImpl) read(c *gin.Context) {
@@ -473,6 +485,56 @@ func (resource *MemoryResourceImpl) supersedeRelationship(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "no matching relationship found on this memory"})
 			return
 		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := resource.manager.PutObject(scopedKey, newMemoryFile([]byte(patched))); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "success", "key": req.Key})
+}
+
+// verify appends a {by, at} entry to an existing memory's `verified` list and
+// writes the result straight back to the blob store. Like
+// supersedeRelationship it skips IndexMemory: verified lives in the
+// frontmatter, not the embedded content.
+func (resource *MemoryResourceImpl) verify(c *gin.Context) {
+	var req VerifyMemoryRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Key == "" || req.By == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key and by are required"})
+		return
+	}
+	at := time.Now()
+	if req.At != "" {
+		parsed, err := time.Parse(time.RFC3339, req.At)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid at %q (want RFC3339)", req.At)})
+			return
+		}
+		at = parsed
+	}
+
+	scopedKey := TomeScopedKey(req.Tome, req.Key)
+
+	content, err := resource.manager.GetObject(scopedKey)
+	if err != nil {
+		if errors.Is(err, managers.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("memory %q not found", req.Key)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	patched, err := AppendMemoryVerified(content, req.By, at)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

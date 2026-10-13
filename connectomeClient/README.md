@@ -25,7 +25,7 @@ from connectomeclient import ConnectomeClient
 client = ConnectomeClient(
     base_url="http://localhost:8080/api/connectome",  # or CONNECTOME_API_BASE_URL
     api_key="your-api-key",                            # or CONNECTOME_API_KEY
-    source_type="my-app",                               # tags memories with where they came from
+    generated_by="my-app/1.0.0",                        # recorded as who produced each memory
 )
 
 await client.remember("David likes tea.", entities=["david"])
@@ -44,12 +44,45 @@ If the backend sits behind Cloudflare Access, pass a service token via
 `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers on every request,
 only when both are set.
 
+### Provenance
+
+Memories are written in schema `connectome/memory/0.2`, whose provenance
+fields follow the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md):
+
+- `generated: {by, at}` - who produced the memory. `by` is the client's
+  `generated_by` (default `connectomeclient/<version>`), or the per-call
+  `remember(..., generated_by=...)` override. Actors are written as
+  `<producer>/<version>` for agents and tools, `human:<id>` for people and
+  `process:<id>` for jobs.
+- `sources` - what the memory was extracted from, passed to `remember`.
+- `verified` - who confirmed the memory's content, appended by `verify`
+  without re-embedding.
+
+```python
+result = await client.remember(
+    "The party found a sealed door under the mill.",
+    generated_by="process:session-pipeline",
+    sources=[{"id": "chunk-12", "resource": "mem_5f2c.md", "title": "Session 14 transcript, 00:42-00:47"}],
+)
+await client.verify(result["key"], "human:discord-1234")
+```
+
+Use `sources` for extraction provenance. `derived_from` is only for a facet:
+one entity's own, diverging version of another memory's content.
+
+Documents written as 0.1 are not migrated. The backend returns them as 0.2
+from `get_memory` and hydrated `recall` (`generated` is derived from the old
+`source` block) and rewrites them as 0.2 the next time it patches them.
+`upgrade_memory_metadata` applies the same upgrade to frontmatter read some
+other way. The constructor's `source_type` argument is the 0.1 name for
+`generated_by` and still works.
+
 ### Tomes
 
 A tome is an isolated namespace: memories written to one tome are invisible to
 reads, searches, and listings of any other. Every method that touches memory
 data takes an optional `tome` argument (`remember`, `recall`, `get_memory`,
-`get_entity`, `browse_all`, `forget`, `supersede_relationship`,
+`get_entity`, `browse_all`, `forget`, `supersede_relationship`, `verify`,
 `assert_relationship`); omit it to use the default tome. A memory must be read
 and deleted with the same `tome` it was written with.
 

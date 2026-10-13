@@ -30,12 +30,6 @@ type relationshipDocument struct {
 	SupersededBy    *string `yaml:"superseded_by"`
 }
 
-// memorySourceDocument mirrors MemorySource in server.py.
-type memorySourceDocument struct {
-	Type      string `yaml:"type"`
-	CreatedAt string `yaml:"created_at"`
-}
-
 // fullMemoryFrontmatter is the complete connectome memory frontmatter shape
 // (see MemoryMetadata in server.py). Unlike memoryFrontmatter - which only
 // extracts what indexing needs - this round-trips every field so a patch can
@@ -50,8 +44,16 @@ type fullMemoryFrontmatter struct {
 	// gaining an `occurred_at: ""` line. Preserving it matters: hydrate and
 	// relationship patches rewrite frontmatter through this struct, and would
 	// otherwise drop the field.
-	OccurredAt    string                 `yaml:"occurred_at,omitempty"`
-	Source        memorySourceDocument   `yaml:"source"`
+	OccurredAt string `yaml:"occurred_at,omitempty"`
+	// Source is the 0.1 provenance block. It is only ever read: upgrade
+	// folds it into Generated and clears it, so a rewritten document never
+	// carries one.
+	Source *memorySourceDocument `yaml:"source,omitempty"`
+	// Generated, Verified and Sources are the 0.2 provenance fields - see
+	// memoryProvenance.go.
+	Generated     *actorStamp            `yaml:"generated,omitempty"`
+	Verified      verifiedList           `yaml:"verified,omitempty"`
+	Sources       []sourceDocument       `yaml:"sources,omitempty"`
 	Entities      []string               `yaml:"entities"`
 	Relationships []relationshipDocument `yaml:"relationships"`
 	// ACL is a pointer with omitempty so a document that never had the key
@@ -62,6 +64,32 @@ type fullMemoryFrontmatter struct {
 	// acl, format_memory always includes this key (as null for a root
 	// memory), so it round-trips without omitempty.
 	DerivedFrom *string `yaml:"derived_from"`
+	// Extra holds every key this struct doesn't declare, so a rewrite keeps
+	// fields added by a newer schema or another producer instead of silently
+	// dropping them (OKF requires consumers to preserve unrecognized keys).
+	Extra map[string]yaml.Node `yaml:",inline"`
+}
+
+// parseFullMemoryFrontmatter splits a memory document and decodes its whole
+// frontmatter for a rewrite.
+func parseFullMemoryFrontmatter(content string) (fm fullMemoryFrontmatter, body string, err error) {
+	raw, body, ok := splitFrontmatter(content)
+	if !ok {
+		return fm, "", fmt.Errorf("content has no parseable memory frontmatter")
+	}
+	if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
+		return fm, "", fmt.Errorf("parse frontmatter: %w", err)
+	}
+	return fm, body, nil
+}
+
+// render reassembles a memory document from fm and an untouched body.
+func (fm fullMemoryFrontmatter) render(body string) (string, error) {
+	out, err := yaml.Marshal(fm)
+	if err != nil {
+		return "", fmt.Errorf("marshal frontmatter: %w", err)
+	}
+	return "---\n" + strings.TrimRight(string(out), "\n") + "\n---\n" + body, nil
 }
 
 // relationshipMatches reports whether rel names the same
@@ -82,17 +110,13 @@ func relationshipMatches(rel relationshipDocument, subjectEntityID, predicate st
 // document's frontmatter - pass nil to clear a prior supersession. Content,
 // entities, acl, and every other relationship are left untouched, and the
 // body is never parsed or rewritten, so callers can persist the result
-// without re-embedding.
+// without re-embedding. A 0.1 document comes back as 0.2 (see upgrade).
 func PatchRelationshipSupersededBy(content, subjectEntityID, predicate string, objectEntityID, supersededBy *string) (string, error) {
-	raw, body, ok := splitFrontmatter(content)
-	if !ok {
-		return "", fmt.Errorf("content has no parseable memory frontmatter")
+	fm, body, err := parseFullMemoryFrontmatter(content)
+	if err != nil {
+		return "", err
 	}
-
-	var fm fullMemoryFrontmatter
-	if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
-		return "", fmt.Errorf("parse frontmatter: %w", err)
-	}
+	fm.upgrade()
 
 	found := false
 	for i := range fm.Relationships {
@@ -109,10 +133,5 @@ func PatchRelationshipSupersededBy(content, subjectEntityID, predicate string, o
 		return "", ErrRelationshipNotFound
 	}
 
-	patchedYAML, err := yaml.Marshal(fm)
-	if err != nil {
-		return "", fmt.Errorf("marshal frontmatter: %w", err)
-	}
-
-	return "---\n" + strings.TrimRight(string(patchedYAML), "\n") + "\n---\n" + body, nil
+	return fm.render(body)
 }

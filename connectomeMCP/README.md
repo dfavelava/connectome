@@ -74,3 +74,4 @@ The MCP tools call these authenticated backend routes:
 - `GET /api/connectome/memory/list`
 - `DELETE /api/connectome/memory/`
 - `PATCH /api/connectome/memory/relationship` — used by `supersede_relationship` to set (or clear) `superseded_by` on one relationship entry in place, without re-embedding the memory.
+- `PATCH /api/connectome/memory/verified` — used by `verify` to append a `{by, at}` entry to a memory's `verified` list in place, without re-embedding the memory.
