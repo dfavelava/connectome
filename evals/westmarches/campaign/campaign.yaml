@@ -1,0 +1,751 @@
+# The Marches of Vell: a small synthetic West Marches campaign for the
+# westmarches-eval harness (see ../README.md). Fictional and hand-written for
+# this eval; it holds no real players' content. Written once and checked in, so
+# every run ingests the same memories and asks the same questions. A change to
+# this file changes the campaign's sha256, which every result records.
+#
+# Shape:
+#   gm, parties    who plays. Every party member is asserted member_of their
+#                  party in the run's tome, as the bot does.
+#   sessions       memories in the order the bot would write them. Each has a
+#                  campaign-local id (the harness maps it to the key remember
+#                  returns), a type, content, relationships
+#                  [subject, predicate, object, kind?] (kind defaults to fact),
+#                  and an acl: "public" (no acl), or a list of party/player ids.
+#                  A non-public acl also gets the GM, who sees everything.
+#                  `derived_from` makes a memory a facet of another;
+#                  `supersedes` marks every relationship of the listed memories
+#                  superseded_by this one. occurred_at is the session's date
+#                  unless a memory sets its own `date`.
+#   questions      asked as a viewer (`as`). `kind` picks the scores it feeds:
+#                  truth, staleness, perspective, graph or leakage. `gold` lists
+#                  the memories that answer it; `stale` the superseded ones a
+#                  current answer must not rest on; `truth` the gold truth
+#                  status; `probes` the hidden memories a leakage question
+#                  fishes for.
+
+name: The Marches of Vell
+gm: gm
+parties:
+  party-lanterns:
+    name: The Lanterns
+    members: [ana, bram, cyd]
+  party-greyhawks:
+    name: The Greyhawks
+    members: [dara, ewan, fio]
+  party-wardens:
+    name: The Mire Wardens
+    members: [gus, hale, ivo]
+
+sessions:
+  - id: s00
+    title: The GM's primer, before play
+    date: "2026-03-01T18:00:00Z"
+    memories:
+      # The hex map. Brindle Haven is the only hex mapped at the start.
+      - id: hex-haven
+        type: fact
+        content: Brindle Haven is the walled market town every expedition sets out from, and the only hex on the shared map at the start of the campaign. Its hex borders Oakmere, the Ashwood and Stonereach.
+        rel: [[brindle-haven, borders, oakmere], [brindle-haven, borders, ashwood], [brindle-haven, borders, stonereach]]
+        acl: public
+      - id: hex-oakmere
+        type: fact
+        content: Oakmere is a farming village of reed roofs beside a shallow lake. Its hex borders Brindle Haven, Greyfen and Mirewater.
+        rel: [[oakmere, borders, brindle-haven], [oakmere, borders, greyfen], [oakmere, borders, mirewater]]
+        acl: public
+      - id: hex-ashwood
+        type: fact
+        content: The Ashwood is an old forest of grey-barked trees, home to the ruined Hollow Mill. Its hex borders Brindle Haven, Stonereach, Thornvale and the Wolfden.
+        rel: [[ashwood, borders, brindle-haven], [ashwood, borders, stonereach], [ashwood, borders, thornvale], [ashwood, borders, wolfden]]
+        acl: public
+      - id: hex-stonereach
+        type: fact
+        content: Stonereach is a range of windy limestone hills with a hermit's shrine on its highest tor. Its hex borders Brindle Haven, the Ashwood, the Barrow Downs and Redcrag.
+        rel: [[stonereach, borders, brindle-haven], [stonereach, borders, ashwood], [stonereach, borders, barrow-downs], [stonereach, borders, redcrag]]
+        acl: public
+      - id: hex-greyfen
+        type: fact
+        content: Greyfen is a reed marsh crossed by the Ostry river. Its hex borders Oakmere, Mirewater and the Sunken Abbey.
+        rel: [[greyfen, borders, oakmere], [greyfen, borders, mirewater], [greyfen, borders, sunken-abbey]]
+        acl: public
+      - id: hex-mirewater
+        type: fact
+        content: Mirewater is a long black lake crossed only by ferry. Its hex borders Oakmere, Greyfen and the Cinder Flats.
+        rel: [[mirewater, borders, oakmere], [mirewater, borders, greyfen], [mirewater, borders, cinder-flats]]
+        acl: public
+      - id: hex-thornvale
+        type: fact
+        content: Thornvale is a valley choked with briars and abandoned orchards. Its hex borders the Ashwood, the Wolfden and Saltcliff.
+        rel: [[thornvale, borders, ashwood], [thornvale, borders, wolfden], [thornvale, borders, saltcliff]]
+        acl: public
+      - id: hex-wolfden
+        type: fact
+        content: The Wolfden is a maze of caves and gullies where goblins and wolves den together. Its hex borders the Ashwood, Thornvale and Redcrag.
+        rel: [[wolfden, borders, ashwood], [wolfden, borders, thornvale], [wolfden, borders, redcrag]]
+        acl: public
+      - id: hex-barrow-downs
+        type: fact
+        content: The Barrow Downs are grassy hills studded with ancient burial cairns. Its hex borders Stonereach and Redcrag.
+        rel: [[barrow-downs, borders, stonereach], [barrow-downs, borders, redcrag]]
+        acl: public
+      - id: hex-redcrag
+        type: fact
+        content: Redcrag is a red sandstone escarpment riddled with old mine shafts. Its hex borders Stonereach, the Wolfden, the Barrow Downs and Ember Peak.
+        rel: [[redcrag, borders, stonereach], [redcrag, borders, wolfden], [redcrag, borders, barrow-downs], [redcrag, borders, ember-peak]]
+        acl: public
+      - id: hex-sunken-abbey
+        type: fact
+        content: The Sunken Abbey is a drowned monastery whose bell tower still rises above the flood. Its hex borders Greyfen and the Cinder Flats.
+        rel: [[sunken-abbey, borders, greyfen], [sunken-abbey, borders, cinder-flats]]
+        acl: public
+      - id: hex-cinder-flats
+        type: fact
+        content: The Cinder Flats are a plain of black ash where nothing grows. Its hex borders Mirewater and the Sunken Abbey.
+        rel: [[cinder-flats, borders, mirewater], [cinder-flats, borders, sunken-abbey]]
+        acl: public
+      - id: hex-saltcliff
+        type: fact
+        content: Saltcliff is a stretch of chalk cliffs above a smugglers' cove. Its hex borders only Thornvale.
+        rel: [[saltcliff, borders, thornvale]]
+        acl: public
+      - id: hex-ember-peak
+        type: fact
+        content: Ember Peak is a smoking volcano at the edge of the known Marches. Its hex borders only Redcrag.
+        rel: [[ember-peak, borders, redcrag]]
+        acl: public
+
+      # The shared map's fog: every hex but Brindle Haven starts unexplored.
+      - {id: status-oakmere, type: fact, content: On the shared map Oakmere is still unexplored fog., rel: [[oakmere, map_status, unexplored]], acl: public}
+      - {id: status-ashwood, type: fact, content: On the shared map the Ashwood is still unexplored fog., rel: [[ashwood, map_status, unexplored]], acl: public}
+      - {id: status-stonereach, type: fact, content: On the shared map Stonereach is still unexplored fog., rel: [[stonereach, map_status, unexplored]], acl: public}
+      - {id: status-greyfen, type: fact, content: On the shared map Greyfen is still unexplored fog., rel: [[greyfen, map_status, unexplored]], acl: public}
+      - {id: status-mirewater, type: fact, content: On the shared map Mirewater is still unexplored fog., rel: [[mirewater, map_status, unexplored]], acl: public}
+      - {id: status-thornvale, type: fact, content: On the shared map Thornvale is still unexplored fog., rel: [[thornvale, map_status, unexplored]], acl: public}
+      - {id: status-wolfden, type: fact, content: On the shared map the Wolfden is still unexplored fog., rel: [[wolfden, map_status, unexplored]], acl: public}
+      - {id: status-barrow-downs, type: fact, content: On the shared map the Barrow Downs are still unexplored fog., rel: [[barrow-downs, map_status, unexplored]], acl: public}
+      - {id: status-redcrag, type: fact, content: On the shared map Redcrag is still unexplored fog., rel: [[redcrag, map_status, unexplored]], acl: public}
+      - {id: status-sunken-abbey, type: fact, content: On the shared map the Sunken Abbey is still unexplored fog., rel: [[sunken-abbey, map_status, unexplored]], acl: public}
+      - {id: status-cinder-flats, type: fact, content: On the shared map the Cinder Flats are still unexplored fog., rel: [[cinder-flats, map_status, unexplored]], acl: public}
+      - {id: status-saltcliff, type: fact, content: On the shared map Saltcliff is still unexplored fog., rel: [[saltcliff, map_status, unexplored]], acl: public}
+      - {id: status-ember-peak, type: fact, content: On the shared map Ember Peak is still unexplored fog., rel: [[ember-peak, map_status, unexplored]], acl: public}
+
+      # The parties.
+      - id: roster-lanterns
+        type: fact
+        content: Ana, Bram and Cyd ride together as the Lanterns.
+        rel: [[ana, member_of, party-lanterns], [bram, member_of, party-lanterns], [cyd, member_of, party-lanterns]]
+        acl: public
+      - id: roster-greyhawks
+        type: fact
+        content: Dara, Ewan and Fio ride together as the Greyhawks.
+        rel: [[dara, member_of, party-greyhawks], [ewan, member_of, party-greyhawks], [fio, member_of, party-greyhawks]]
+        acl: public
+      - id: roster-wardens
+        type: fact
+        content: Gus, Hale and Ivo ride together as the Mire Wardens.
+        rel: [[gus, member_of, party-wardens], [hale, member_of, party-wardens], [ivo, member_of, party-wardens]]
+        acl: public
+      - id: lanterns-leader-ana
+        type: fact
+        content: Ana leads the Lanterns and has the final say on where they ride.
+        rel: [[ana, leads, party-lanterns]]
+        acl: [party-lanterns]
+
+      # The people of Brindle Haven and the Marches.
+      - id: npc-tamsin
+        type: fact
+        content: Tamsin runs the Crooked Lantern, the inn in Brindle Haven where adventurers trade news.
+        rel: [[tamsin, runs, crooked-lantern]]
+        acl: public
+      - id: npc-halvard
+        type: fact
+        content: Lord Halvard rules Brindle Haven from the keep above the market square.
+        rel: [[lord-halvard, rules, brindle-haven]]
+        acl: public
+      - id: npc-ysolde
+        type: fact
+        content: Ysolde is the smith of Brindle Haven and mends the parties' armour.
+        rel: [[ysolde, works_in, brindle-haven]]
+        acl: public
+      - id: npc-kestrel
+        type: fact
+        content: Kestrel is a ranger who guides travellers through the Ashwood.
+        rel: [[kestrel, guides_in, ashwood]]
+        acl: public
+      - id: npc-callo
+        type: fact
+        content: Brother Callo is the hermit who keeps the shrine on the highest tor of Stonereach.
+        rel: [[brother-callo, keeps, stonereach-shrine]]
+        acl: public
+      - id: npc-mag-orra
+        type: fact
+        content: Mag Orra, called the Witch of Greyfen, lives in a stilt house deep in the Greyfen marsh.
+        rel: [[mag-orra, lives_in, greyfen]]
+        acl: public
+      - id: npc-nim
+        type: fact
+        content: Nim is the goblin chief of the Wolfden.
+        rel: [[nim, chief_of, wolfden]]
+        acl: public
+      - id: npc-osric
+        type: fact
+        content: Osric is the ferryman who poles travellers across Mirewater.
+        rel: [[osric, runs, mirewater-ferry]]
+        acl: public
+      - id: watch-vane
+        type: fact
+        content: Captain Roderick Vane commands the Haven watch.
+        rel: [[roderick-vane, captain_of, haven-watch]]
+        acl: public
+      - id: wenna-oakmere
+        type: fact
+        content: Mother Wenna the herbalist keeps her herb garden and her cottage in Oakmere.
+        rel: [[mother-wenna, lives_in, oakmere]]
+        acl: public
+      - id: ferry-2-silver
+        type: fact
+        content: The Mirewater ferry costs 2 silver a head.
+        rel: [[osric, charges_toll_for, mirewater-ferry]]
+        acl: public
+      - id: room-3-copper
+        type: fact
+        content: A room for the night at the Crooked Lantern costs 3 copper.
+        rel: [[crooked-lantern, room_price, null]]
+        acl: public
+      - id: wolf-bounty
+        type: fact
+        content: Lord Halvard pays 1 gold for every wolf pelt brought to the Haven keep.
+        rel: [[lord-halvard, pays_bounty_for, wolf-pelts]]
+        acl: public
+
+      # The GM's secrets. Only the GM may ever see these.
+      - id: gm-abbot
+        type: note
+        content: "GM secret: Abbot Seren did not die when the abbey sank. He is alive and leads the Ash King cult from the flooded crypt of the Sunken Abbey."
+        rel: [[abbot-seren, leads, ash-king-cult]]
+        acl: [gm]
+      - id: gm-well
+        type: note
+        content: "GM secret: the Ash King cult, not the Witch of Greyfen, poisoned the Oakmere well with nightshade from the abbey gardens."
+        rel: [[ash-king-cult, poisoned, oakmere-well]]
+        acl: [gm]
+      - id: gm-bridge
+        type: note
+        content: "GM secret: Brother Callo cut the ropes of the Ostry Ford bridge on Abbot Seren's orders."
+        rel: [[brother-callo, sabotaged, ostry-ford-bridge]]
+        acl: [gm]
+      - id: gm-kestrel
+        type: note
+        content: "GM secret: Kestrel the ranger is an informant for the Ash King cult and reports every party she guides."
+        rel: [[kestrel, informs_for, ash-king-cult]]
+        acl: [gm]
+      - id: gm-crown
+        type: note
+        content: "GM secret: the Crown of Vell lies under the great cairn of the Barrow Downs, guarded by a wight."
+        rel: [[crown-of-vell, hidden_in, barrow-downs]]
+        acl: [gm]
+      - id: gm-arsonist
+        type: note
+        content: "GM secret: the Haven market fire was set by Roderick Vane's nephew Pip, paid by the Ash King cult to cover a theft from the counting house."
+        rel: [[pip-vane, set_fire_to, haven-market]]
+        acl: [gm]
+
+      # Players' private backstories, visible to that player and the GM only.
+      - id: ana-secret
+        type: note
+        content: Ana's backstory is that she is the lost niece of Lord Halvard, and she keeps her family a secret from everyone.
+        rel: [[ana, niece_of, lord-halvard]]
+        acl: [ana]
+      - id: gus-vow
+        type: note
+        content: Gus swore a private oath to the Witch of Greyfen to fetch her a bell from the Sunken Abbey in exchange for a cure for his sister.
+        rel: [[gus, sworn_to, mag-orra]]
+        acl: [gus]
+
+  - id: s01
+    title: The Lanterns ride to Oakmere
+    date: "2026-03-07T19:00:00Z"
+    memories:
+      - id: explore-oakmere
+        type: event
+        content: The Lanterns explored Oakmere and marked it on the shared map.
+        rel: [[oakmere, map_status, explored], [party-lanterns, explored, oakmere]]
+        acl: public
+        supersedes: [status-oakmere]
+      - id: lanterns-meet-wenna
+        type: event
+        content: Ana and Cyd met Mother Wenna at her Oakmere cottage, and she sold them healing salves. Bram stayed with the horses.
+        rel: [[ana, met, mother-wenna], [cyd, met, mother-wenna]]
+        acl: [party-lanterns]
+      - id: rumor-mill-ghost
+        type: note
+        content: The miller's ghost haunts the Hollow Mill in the Ashwood.
+        rel: [[millers-ghost, haunts, hollow-mill, rumor]]
+        acl: public
+      - id: rumor-dragon
+        type: note
+        content: Travellers at the Crooked Lantern say a red dragon sleeps under Ember Peak.
+        rel: [[red-dragon, sleeps_under, ember-peak, rumor]]
+        acl: public
+      - id: oakmere-well
+        type: event
+        content: Half of Oakmere fell sick after drinking from the village well, and the elders have sealed it.
+        rel: [[oakmere-well, poisoned, null]]
+        acl: public
+
+  - id: s02
+    title: The Greyhawks enter the Ashwood
+    date: "2026-03-14T19:00:00Z"
+    memories:
+      - id: explore-ashwood
+        type: event
+        content: The Greyhawks explored the Ashwood and marked it on the shared map.
+        rel: [[ashwood, map_status, explored], [party-greyhawks, explored, ashwood]]
+        acl: public
+        supersedes: [status-ashwood]
+      - id: greyhawks-meet-kestrel
+        type: event
+        content: Dara and Ewan met Kestrel the ranger at a hunting camp in the Ashwood, and she showed them a safe path. Fio was back in Brindle Haven buying rope.
+        rel: [[dara, met, kestrel], [ewan, met, kestrel]]
+        acl: [party-greyhawks]
+      - id: greyhawks-iron-key
+        type: event
+        content: The Greyhawks killed a robed cultist in the Ashwood and took an iron key stamped with a bell from his belt.
+        rel: [[party-greyhawks, took, iron-key]]
+        acl: [party-greyhawks]
+      - id: edric-missing
+        type: event
+        content: Sir Edric of Haven has gone missing on the Stonereach road.
+        rel: [[sir-edric, missing_on, stonereach-road]]
+        acl: public
+      - id: rumor-witch
+        type: note
+        content: The Witch of Greyfen eats children who stray into the marsh.
+        rel: [[mag-orra, eats, children, rumor]]
+        acl: public
+
+  - id: s03
+    title: The Mire Wardens climb Stonereach
+    date: "2026-03-21T19:00:00Z"
+    memories:
+      - id: explore-stonereach
+        type: event
+        content: The Mire Wardens explored Stonereach and marked it on the shared map.
+        rel: [[stonereach, map_status, explored], [party-wardens, explored, stonereach]]
+        acl: public
+        supersedes: [status-stonereach]
+      - id: wardens-meet-callo
+        type: event
+        content: Gus, Hale and Ivo met Brother Callo at the Stonereach shrine. He let them shelter there and asked them many questions about the Sunken Abbey.
+        rel: [[gus, met, brother-callo], [hale, met, brother-callo], [ivo, met, brother-callo]]
+        acl: [party-wardens]
+      - id: wardens-suspect-callo
+        type: note
+        content: Brother Callo is hiding something about the Sunken Abbey.
+        rel: [[brother-callo, hides_secret_about, sunken-abbey, hypothesis]]
+        acl: [party-wardens]
+      - id: rumor-redcrag-gold
+        type: note
+        content: There is dwarven gold in the old Redcrag mines.
+        rel: [[redcrag, holds, dwarven-gold, rumor]]
+        acl: public
+
+  - id: s04
+    title: The storm at Ostry Ford
+    date: "2026-03-28T19:00:00Z"
+    memories:
+      - id: explore-greyfen
+        type: event
+        content: The Lanterns explored Greyfen and marked it on the shared map.
+        rel: [[greyfen, map_status, explored], [party-lanterns, explored, greyfen]]
+        acl: public
+        supersedes: [status-greyfen]
+      - id: lanterns-mill
+        type: event
+        content: Inside the Hollow Mill the Lanterns found smugglers' crates of Saltcliff brandy, and no ghost at all.
+        rel: [[hollow-mill, holds, smugglers-brandy]]
+        acl: [party-lanterns]
+      - id: greyhawks-suspect-witch
+        type: note
+        content: The Witch of Greyfen poisoned the Oakmere well.
+        rel: [[mag-orra, poisoned, oakmere-well, hypothesis]]
+        acl: [party-greyhawks]
+      # One event, three parties' versions of it.
+      - id: bridge
+        type: event
+        content: The bridge at Ostry Ford, between Oakmere and Greyfen, collapsed during the storm on the night of 28 March.
+        rel: [[ostry-ford-bridge, collapsed, null]]
+        acl: public
+      - id: bridge-lanterns
+        type: event
+        content: From the far bank the Lanterns saw a figure in grey robes cut the ropes of the Ostry Ford bridge moments before it fell.
+        rel: [[grey-robed-figure, cut_ropes_of, ostry-ford-bridge]]
+        acl: [party-lanterns]
+        derived_from: bridge
+      - id: bridge-greyhawks
+        type: event
+        content: The Greyhawks examined the wreck of the Ostry Ford bridge, found its pilings rotted through, and think the storm simply finished it off.
+        rel: [[ostry-ford-bridge, collapsed_from, rot, hypothesis]]
+        acl: [party-greyhawks]
+        derived_from: bridge
+      - id: bridge-wardens
+        type: event
+        content: Beside the wreck of the Ostry Ford bridge the Mire Wardens overheard goblins boasting that their chief Nim had brought it down.
+        rel: [[nim, brought_down, ostry-ford-bridge, rumor]]
+        acl: [party-wardens]
+        derived_from: bridge
+
+  - id: s05
+    title: The Mire Wardens cross Mirewater
+    date: "2026-04-04T19:00:00Z"
+    memories:
+      - id: explore-mirewater
+        type: event
+        content: The Mire Wardens explored Mirewater and marked it on the shared map.
+        rel: [[mirewater, map_status, explored], [party-wardens, explored, mirewater]]
+        acl: public
+        supersedes: [status-mirewater]
+      - id: wardens-meet-osric
+        type: event
+        content: Hale and Ivo met Osric the ferryman and crossed Mirewater on his raft while Gus kept watch on the shore.
+        rel: [[hale, met, osric], [ivo, met, osric]]
+        acl: [party-wardens]
+      - id: ferry-5-silver
+        type: fact
+        content: Since the spring flood, Osric charges 5 silver a head for the Mirewater ferry.
+        rel: [[osric, charges_toll_for, mirewater-ferry]]
+        acl: public
+        supersedes: [ferry-2-silver]
+      - id: wenna-haven
+        type: fact
+        content: Mother Wenna moved to Brindle Haven after floodwater ruined her Oakmere garden, and now sells herbs beside the Haven well.
+        rel: [[mother-wenna, lives_in, brindle-haven]]
+        acl: public
+        supersedes: [wenna-oakmere]
+      - id: lanterns-leader-bram
+        type: fact
+        content: After the Greyfen expedition the Lanterns voted Bram their new leader in Ana's place.
+        rel: [[bram, leads, party-lanterns]]
+        acl: [party-lanterns]
+        supersedes: [lanterns-leader-ana]
+      - id: abbey-dam
+        type: note
+        content: The Sunken Abbey sank when the old Mirewater dam broke.
+        rel: [[sunken-abbey, sank_because_of, mirewater-dam, hypothesis]]
+        acl: public
+
+  - id: s06
+    title: Thornvale and the market fire
+    date: "2026-04-18T19:00:00Z"
+    memories:
+      - id: explore-thornvale
+        type: event
+        content: The Greyhawks explored Thornvale and marked it on the shared map.
+        rel: [[thornvale, map_status, explored], [party-greyhawks, explored, thornvale]]
+        acl: public
+        supersedes: [status-thornvale]
+      - id: greyhawks-meet-wenna
+        type: event
+        content: Dara and Fio met Mother Wenna at her new herb stall in Brindle Haven, and she treated Fio's burns. Ewan was at the smithy.
+        rel: [[dara, met, mother-wenna], [fio, met, mother-wenna]]
+        acl: [party-greyhawks]
+      - id: fire
+        type: event
+        content: Fire broke out in the Brindle Haven market on the night of 18 April and burned three stalls to the ground.
+        rel: [[haven-market, burned, null]]
+        acl: public
+      - id: fire-lanterns
+        type: event
+        content: The Lanterns pulled Ysolde the smith out of the burning Haven market, and she told them the fire started in Tamsin's storehouse.
+        rel: [[haven-market-fire, started_in, tamsins-storehouse]]
+        acl: [party-lanterns]
+        derived_from: fire
+      - id: fire-greyhawks
+        type: event
+        content: The Greyhawks chased a hooded arsonist away from the Haven market fire but lost him in the alleys by the east gate.
+        rel: [[hooded-arsonist, set, haven-market-fire]]
+        acl: [party-greyhawks]
+        derived_from: fire
+      - id: fire-wardens
+        type: event
+        content: The Mire Wardens smelled lamp oil on the burned market stalls and think the fire was set to cover a theft from the counting house.
+        rel: [[haven-market-fire, covered, counting-house-theft, hypothesis]]
+        acl: [party-wardens]
+        derived_from: fire
+      - id: watch-marr
+        type: fact
+        content: After the market fire, Lord Halvard dismissed Roderick Vane and made Ilsa Marr captain of the Haven watch.
+        rel: [[ilsa-marr, captain_of, haven-watch]]
+        acl: public
+        supersedes: [watch-vane]
+      - id: bounty-cancelled
+        type: fact
+        content: Lord Halvard has cancelled the wolf-pelt bounty; the keep no longer pays for pelts.
+        rel: [[lord-halvard, cancelled_bounty_for, wolf-pelts]]
+        acl: public
+        supersedes: [wolf-bounty]
+      - id: room-1-silver
+        type: fact
+        content: Tamsin raised the price of a room at the Crooked Lantern to 1 silver after the market fire.
+        rel: [[crooked-lantern, room_price, null]]
+        acl: public
+        supersedes: [room-3-copper]
+
+  - id: s07
+    title: The night of the bell
+    date: "2026-05-02T19:00:00Z"
+    memories:
+      - id: bell
+        type: event
+        content: At midnight on 2 May every party in the field heard a great bell toll from the direction of the Sunken Abbey.
+        rel: [[sunken-abbey-bell, tolled, null]]
+        acl: public
+      - id: bell-lanterns
+        type: event
+        content: From the Greyfen road the Lanterns counted thirteen strokes of the Sunken Abbey bell and saw a green light over the water.
+        rel: [[party-lanterns, saw, green-light]]
+        acl: [party-lanterns]
+        derived_from: bell
+      - id: bell-greyhawks
+        type: event
+        content: Camped in Thornvale, the Greyhawks heard the Sunken Abbey bell only faintly, and Fio swore it rang backwards.
+        rel: [[party-greyhawks, heard, sunken-abbey-bell]]
+        acl: [party-greyhawks]
+        derived_from: bell
+      - id: bell-wardens
+        type: event
+        content: At Mirewater the Mire Wardens felt the lake go still while the Sunken Abbey bell tolled, and every fish in it rose to the surface dead.
+        rel: [[party-wardens, saw, dead-fish]]
+        acl: [party-wardens]
+        derived_from: bell
+      - id: edric-returned
+        type: event
+        content: Sir Edric returned to Brindle Haven, wounded, after escaping from goblins in the Wolfden.
+        rel: [[sir-edric, returned_to, brindle-haven]]
+        acl: public
+        supersedes: [edric-missing]
+
+questions:
+  # Truth status: does the answer call a rumor a rumor and a hypothesis a
+  # hypothesis, and state a fact as a fact?
+  - id: truth-mill-ghost
+    kind: truth
+    as: gus
+    question: What haunts the Hollow Mill?
+    answer: The miller's ghost, but that is only a rumor.
+    truth: rumor
+    gold: [rumor-mill-ghost]
+  - id: truth-dragon
+    kind: truth
+    as: ana
+    question: What lives under Ember Peak?
+    answer: A red dragon, according to rumor.
+    truth: rumor
+    gold: [rumor-dragon]
+  - id: truth-witch
+    kind: truth
+    as: hale
+    question: What happens to children who stray into Greyfen?
+    answer: The Witch of Greyfen eats them, according to rumor.
+    truth: rumor
+    gold: [rumor-witch]
+  - id: truth-redcrag-gold
+    kind: truth
+    as: ivo
+    question: Is there treasure in the Redcrag mines?
+    answer: Dwarven gold, according to rumor.
+    truth: rumor
+    gold: [rumor-redcrag-gold]
+  - id: truth-well
+    kind: truth
+    as: dara
+    question: Who poisoned the Oakmere well?
+    answer: The Greyhawks suspect the Witch of Greyfen, but it is unconfirmed.
+    truth: hypothesis
+    gold: [greyhawks-suspect-witch, oakmere-well]
+  - id: truth-abbey-dam
+    kind: truth
+    as: fio
+    question: Why did the Sunken Abbey sink?
+    answer: It is thought that the old Mirewater dam broke, but that is a hypothesis.
+    truth: hypothesis
+    gold: [abbey-dam]
+  - id: truth-callo
+    kind: truth
+    as: gus
+    question: What is Brother Callo hiding?
+    answer: The Mire Wardens suspect he is hiding something about the Sunken Abbey, but it is unconfirmed.
+    truth: hypothesis
+    gold: [wardens-suspect-callo]
+  - id: truth-innkeeper
+    kind: truth
+    as: cyd
+    question: Who runs the Crooked Lantern inn?
+    answer: Tamsin.
+    truth: fact
+    gold: [npc-tamsin]
+  - id: truth-mill-contents
+    kind: truth
+    as: bram
+    question: What is inside the Hollow Mill?
+    answer: Smugglers' crates of Saltcliff brandy.
+    truth: fact
+    gold: [lanterns-mill]
+  - id: truth-iron-key
+    kind: truth
+    as: ewan
+    question: What did the Greyhawks take from the dead cultist?
+    answer: An iron key stamped with a bell.
+    truth: fact
+    gold: [greyhawks-iron-key]
+
+  # Staleness: the current claim must win over the superseded one.
+  - id: stale-watch
+    kind: staleness
+    as: cyd
+    question: Who commands the Haven watch?
+    answer: Ilsa Marr.
+    gold: [watch-marr]
+    stale: [watch-vane]
+  - id: stale-wenna
+    kind: staleness
+    as: dara
+    question: Where can we find Mother Wenna the herbalist?
+    answer: In Brindle Haven, at her herb stall beside the Haven well.
+    gold: [wenna-haven]
+    stale: [wenna-oakmere]
+  - id: stale-ferry
+    kind: staleness
+    as: ivo
+    question: How much does the Mirewater ferry cost?
+    answer: 5 silver a head.
+    gold: [ferry-5-silver]
+    stale: [ferry-2-silver]
+  - id: stale-bounty
+    kind: staleness
+    as: ewan
+    question: Does Lord Halvard pay a bounty for wolf pelts?
+    answer: No, he cancelled the wolf-pelt bounty.
+    gold: [bounty-cancelled]
+    stale: [wolf-bounty]
+  - id: stale-leader
+    kind: staleness
+    as: cyd
+    question: Who leads the Lanterns?
+    answer: Bram.
+    gold: [lanterns-leader-bram]
+    stale: [lanterns-leader-ana]
+  - id: stale-edric
+    kind: staleness
+    as: gus
+    question: Where is Sir Edric?
+    answer: Back in Brindle Haven, wounded, after escaping the Wolfden goblins.
+    gold: [edric-returned]
+    stale: [edric-missing]
+  - id: stale-thornvale
+    kind: staleness
+    as: ana
+    question: Is Thornvale still unexplored on the shared map?
+    answer: No, the Greyhawks explored it.
+    gold: [explore-thornvale]
+    stale: [status-thornvale]
+  - id: stale-greyfen
+    kind: staleness
+    as: hale
+    question: Is Greyfen still unexplored on the shared map?
+    answer: No, the Lanterns explored it.
+    gold: [explore-greyfen]
+    stale: [status-greyfen]
+  - id: stale-room
+    kind: staleness
+    as: fio
+    question: What does a room at the Crooked Lantern cost?
+    answer: 1 silver a night.
+    gold: [room-1-silver]
+    stale: [room-3-copper]
+
+  # Perspective: each viewer gets their own party's version of the event.
+  - {id: persp-bridge-lanterns, kind: perspective, as: bram, question: "Why did the Ostry Ford bridge collapse?", answer: "A figure in grey robes cut its ropes moments before it fell.", gold: [bridge-lanterns]}
+  - {id: persp-bridge-greyhawks, kind: perspective, as: ewan, question: "Why did the Ostry Ford bridge collapse?", answer: "Its pilings were rotted through and the storm finished it off, the Greyhawks think.", gold: [bridge-greyhawks]}
+  - {id: persp-bridge-wardens, kind: perspective, as: hale, question: "Why did the Ostry Ford bridge collapse?", answer: "Goblins boasted that their chief Nim brought it down.", gold: [bridge-wardens]}
+  - {id: persp-fire-lanterns, kind: perspective, as: cyd, question: "What do we know about the Brindle Haven market fire?", answer: "It started in Tamsin's storehouse, Ysolde said after the Lanterns pulled her out.", gold: [fire-lanterns]}
+  - {id: persp-fire-greyhawks, kind: perspective, as: dara, question: "What do we know about the Brindle Haven market fire?", answer: "A hooded arsonist set it and escaped through the alleys by the east gate.", gold: [fire-greyhawks]}
+  - {id: persp-fire-wardens, kind: perspective, as: ivo, question: "What do we know about the Brindle Haven market fire?", answer: "Lamp oil on the stalls suggests it was set to cover a theft from the counting house.", gold: [fire-wardens]}
+  - {id: persp-bell-lanterns, kind: perspective, as: ana, question: "What happened when the Sunken Abbey bell tolled?", answer: "Thirteen strokes and a green light over the water.", gold: [bell-lanterns]}
+  - {id: persp-bell-greyhawks, kind: perspective, as: fio, question: "What happened when the Sunken Abbey bell tolled?", answer: "It was faint from Thornvale, and Fio swore it rang backwards.", gold: [bell-greyhawks]}
+  - {id: persp-bell-wardens, kind: perspective, as: gus, question: "What happened when the Sunken Abbey bell tolled?", answer: "Mirewater went still and every fish in it rose to the surface dead.", gold: [bell-wardens]}
+
+  # Graph: multi-hop questions in the campaign's own terms.
+  - id: graph-ashwood
+    kind: graph
+    as: ana
+    question: Which unexplored hexes border the Ashwood?
+    answer: The Wolfden.
+    gold: [hex-ashwood, hex-haven, explore-stonereach, explore-thornvale, status-wolfden]
+  - id: graph-stonereach
+    kind: graph
+    as: dara
+    question: Which unexplored hexes border Stonereach?
+    answer: The Barrow Downs and Redcrag.
+    gold: [hex-stonereach, status-barrow-downs, status-redcrag, explore-ashwood]
+  - id: graph-greyfen
+    kind: graph
+    as: gus
+    question: Which unexplored hexes border Greyfen?
+    answer: The Sunken Abbey.
+    gold: [hex-greyfen, status-sunken-abbey, explore-oakmere, explore-mirewater]
+  - id: graph-mirewater
+    kind: graph
+    as: hale
+    question: Which unexplored hexes border Mirewater?
+    answer: The Cinder Flats.
+    gold: [hex-mirewater, status-cinder-flats, explore-oakmere, explore-greyfen]
+  - id: graph-thornvale
+    kind: graph
+    as: fio
+    question: Which unexplored hexes border Thornvale?
+    answer: The Wolfden and Saltcliff.
+    gold: [hex-thornvale, status-wolfden, status-saltcliff, explore-ashwood]
+  - id: graph-met-kestrel
+    kind: graph
+    as: ewan
+    question: Who in the Greyhawks has met Kestrel the ranger?
+    answer: Dara and Ewan.
+    gold: [greyhawks-meet-kestrel]
+  - id: graph-met-wenna-greyhawks
+    kind: graph
+    as: fio
+    question: Who in the Greyhawks has met Mother Wenna?
+    answer: Dara and Fio.
+    gold: [greyhawks-meet-wenna]
+  - id: graph-met-wenna-lanterns
+    kind: graph
+    as: bram
+    question: Who in the Lanterns has met Mother Wenna?
+    answer: Ana and Cyd.
+    gold: [lanterns-meet-wenna]
+  - id: graph-met-osric
+    kind: graph
+    as: gus
+    question: Who in the Mire Wardens has met Osric the ferryman?
+    answer: Hale and Ivo.
+    gold: [wardens-meet-osric]
+  - id: graph-gm-shared-npc
+    kind: graph
+    as: gm
+    question: Which NPC have both the Lanterns and the Greyhawks met?
+    answer: Mother Wenna.
+    gold: [lanterns-meet-wenna, greyhawks-meet-wenna]
+
+  # Leakage probes: questions that fish for a memory the viewer must not see.
+  # Every question's results are checked for leakage; these aim straight at it.
+  - {id: leak-abbot, kind: leakage, as: bram, question: "Is Abbot Seren still alive?", answer: "Not known.", probes: [gm-abbot]}
+  - {id: leak-bridge, kind: leakage, as: ewan, question: "Who cut the ropes of the Ostry Ford bridge?", answer: "Not known.", probes: [gm-bridge, bridge-lanterns]}
+  - {id: leak-crown, kind: leakage, as: cyd, question: "Where is the Crown of Vell hidden?", answer: "Not known.", probes: [gm-crown]}
+  - {id: leak-kestrel, kind: leakage, as: dara, question: "Can Kestrel the ranger be trusted?", answer: "Not known.", probes: [gm-kestrel]}
+  - {id: leak-ana-family, kind: leakage, as: bram, question: "Who is Ana's family?", answer: "Not known.", probes: [ana-secret]}
+  - {id: leak-gus-oath, kind: leakage, as: hale, question: "What oath did Gus swear to the Witch of Greyfen?", answer: "Not known.", probes: [gus-vow]}
+  - {id: leak-mill, kind: leakage, as: gus, question: "What did the Lanterns find inside the Hollow Mill?", answer: "Not known.", probes: [lanterns-mill]}
+  - {id: leak-key, kind: leakage, as: ana, question: "Did anyone take a key from a cultist in the Ashwood?", answer: "Not known.", probes: [greyhawks-iron-key]}
+  - {id: leak-arsonist, kind: leakage, as: ivo, question: "Who set the Haven market fire?", answer: "Not known.", probes: [gm-arsonist, fire-greyhawks]}
+  - {id: leak-well, kind: leakage, as: hale, question: "Who poisoned the Oakmere well?", answer: "Not known.", probes: [gm-well, greyhawks-suspect-witch]}

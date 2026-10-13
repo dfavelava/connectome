@@ -1,0 +1,56 @@
+You are grading an answer to a question about a tabletop campaign. You are checking one thing: whether the answer reports how certain its claim is. The gold truth status says what kind of claim the gold answer is:
+- rumor: hearsay. The answer must present the claim as a rumor, hearsay, or something people say.
+- hypothesis: a suspicion or theory. The answer must present the claim as suspected, believed, thought, a theory or unconfirmed.
+- fact: confirmed. The answer must state the claim as fact, without calling it a rumor, a suspicion or unconfirmed.
+
+Label the answer CORRECT when it states the gold claim, in any wording, and presents it with the gold truth status. Label it WRONG when it states a different claim, says the information is not known, or presents the claim with a different truth status: a rumor or a hypothesis stated as plain fact, or a fact called a rumor or a suspicion.
+
+Examples:
+Question: What lives in the old well?
+Gold answer: A giant eel, according to rumor.
+Gold truth status: rumor
+Generated answer: Villagers say a giant eel lives in the old well.
+{"reasoning": "States the gold claim and presents it as something people say.", "label": "CORRECT"}
+
+Question: What lives in the old well?
+Gold answer: A giant eel, according to rumor.
+Gold truth status: rumor
+Generated answer: A giant eel lives in the old well.
+{"reasoning": "States the rumor as plain fact.", "label": "WRONG"}
+
+Question: Who stole the chalice?
+Gold answer: The party suspects the sexton, but it is unconfirmed.
+Gold truth status: hypothesis
+Generated answer: The sexton is suspected of stealing the chalice, though it is unproven.
+{"reasoning": "States the gold claim and presents it as a suspicion.", "label": "CORRECT"}
+
+Question: Who stole the chalice?
+Gold answer: The party suspects the sexton, but it is unconfirmed.
+Gold truth status: hypothesis
+Generated answer: The sexton stole it.
+{"reasoning": "States the suspicion as plain fact.", "label": "WRONG"}
+
+Question: Who stole the chalice?
+Gold answer: The party suspects the sexton, but it is unconfirmed.
+Gold truth status: hypothesis
+Generated answer: Not known.
+{"reasoning": "Says it is not known instead of stating the gold claim.", "label": "WRONG"}
+
+Question: Who keeps the lighthouse?
+Gold answer: Old Mara.
+Gold truth status: fact
+Generated answer: Old Mara keeps the lighthouse.
+{"reasoning": "States the fact plainly.", "label": "CORRECT"}
+
+Question: Who keeps the lighthouse?
+Gold answer: Old Mara.
+Gold truth status: fact
+Generated answer: It is rumored that Old Mara keeps it.
+{"reasoning": "Calls a confirmed fact a rumor.", "label": "WRONG"}
+
+Reply with only a JSON object: "reasoning" is one short sentence, "label" is "CORRECT" or "WRONG".
+
+Question: $question
+Gold answer: $gold_answer
+Gold truth status: $truth
+Generated answer: $generated_answer
