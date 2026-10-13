@@ -206,7 +206,7 @@ func (resource *SearchResourceImpl) search(c *gin.Context) {
 		}
 	}
 	if req.As != nil {
-		filters.ACLScope = resource.resolveACLScope(*req.As)
+		filters.ACLScope = resource.resolveACLScope(filters.TomeID, *req.As)
 	}
 
 	hits, err := resource.index.Search(c.Request.Context(), req.Query, queryEmbedding, k, filters, ranking)
