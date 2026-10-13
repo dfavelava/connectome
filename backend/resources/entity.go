@@ -49,13 +49,12 @@ func entityKey(tome, id string) string {
 // not the groups' own member_of, matching the "no recursion" scope this
 // phase settled on. A missing or unparsable entity record (the id has never
 // been remembered as an entity) degrades to just the id itself rather than
-// failing the search.
-func (resource *SearchResourceImpl) resolveACLScope(as string) []string {
+// failing the search. The record is read from tome, the tome being
+// searched, since that is the tome remember's member_of wrote it to.
+func (resource *SearchResourceImpl) resolveACLScope(tome, as string) []string {
 	scope := []string{as}
 
-	// Search/recall isn't tome-aware yet (see issue #64), so this always
-	// resolves against the default tome for now.
-	content, err := resource.manager.GetObject(entityKey(DefaultTome, as))
+	content, err := resource.manager.GetObject(entityKey(tome, as))
 	if err != nil {
 		return scope
 	}

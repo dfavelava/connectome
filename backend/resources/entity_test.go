@@ -17,6 +17,9 @@ func newLocalManager(t *testing.T, seed map[string]string) managers.MemoryManage
 		t.Fatalf("create connectome dir: %v", err)
 	}
 	for key, content := range seed {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(connectomeDir, key)), 0o755); err != nil {
+			t.Fatalf("create dir for %s: %v", key, err)
+		}
 		if err := os.WriteFile(filepath.Join(connectomeDir, key), []byte(content), 0o644); err != nil {
 			t.Fatalf("seed %s: %v", key, err)
 		}
@@ -33,7 +36,7 @@ func TestResolveACLScopeIncludesOwnIDAndMemberOf(t *testing.T) {
 	})
 	resource := NewSearchResource(manager, fakeEmbedder{}, nil)
 
-	scope := resource.resolveACLScope("alice")
+	scope := resource.resolveACLScope(DefaultTome, "alice")
 	if len(scope) != 3 || scope[0] != "alice" || scope[1] != "Party A" || scope[2] != "Adventurers" {
 		t.Fatalf("expected [alice, Party A, Adventurers], got %v", scope)
 	}
@@ -45,7 +48,7 @@ func TestResolveACLScopeDedupesMemberOf(t *testing.T) {
 	})
 	resource := NewSearchResource(manager, fakeEmbedder{}, nil)
 
-	scope := resource.resolveACLScope("alice")
+	scope := resource.resolveACLScope(DefaultTome, "alice")
 	if len(scope) != 2 || scope[0] != "alice" || scope[1] != "Party A" {
 		t.Fatalf("expected [alice, Party A] with the duplicate collapsed, got %v", scope)
 	}
@@ -55,7 +58,7 @@ func TestResolveACLScopeWithoutEntityRecordIsJustTheID(t *testing.T) {
 	manager := newLocalManager(t, nil)
 	resource := NewSearchResource(manager, fakeEmbedder{}, nil)
 
-	scope := resource.resolveACLScope("ghost")
+	scope := resource.resolveACLScope(DefaultTome, "ghost")
 	if len(scope) != 1 || scope[0] != "ghost" {
 		t.Fatalf("expected [ghost], got %v", scope)
 	}
@@ -67,8 +70,21 @@ func TestResolveACLScopeWithNoMemberOfFieldIsJustTheID(t *testing.T) {
 	})
 	resource := NewSearchResource(manager, fakeEmbedder{}, nil)
 
-	scope := resource.resolveACLScope("bob")
+	scope := resource.resolveACLScope(DefaultTome, "bob")
 	if len(scope) != 1 || scope[0] != "bob" {
 		t.Fatalf("expected [bob], got %v", scope)
+	}
+}
+
+func TestResolveACLScopeReadsTheSearchedTome(t *testing.T) {
+	manager := newLocalManager(t, map[string]string{
+		"ent_alice.json":                    `{"id":"alice","member_of":["Default Party"]}`,
+		entityKey("temp-campaign", "alice"): `{"id":"alice","member_of":["Party A"]}`,
+	})
+	resource := NewSearchResource(manager, fakeEmbedder{}, nil)
+
+	scope := resource.resolveACLScope("temp-campaign", "alice")
+	if len(scope) != 2 || scope[0] != "alice" || scope[1] != "Party A" {
+		t.Fatalf("expected [alice, Party A] from the searched tome, got %v", scope)
 	}
 }
