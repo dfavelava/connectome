@@ -155,8 +155,11 @@ def test_provenance_survives_verify_and_supersede(backend: Backend) -> None:
     asyncio.run(_provenance(backend))
 
 
-def test_recall_as_scopes_results_by_acl_and_member_of(backend: Backend) -> None:
-    asyncio.run(_recall_as_acl_scope(backend))
+# The tome case: member_of is written into the memory's own tome, so `as`
+# must resolve it from the tome being searched, not the default one.
+@pytest.mark.parametrize("tome", [None, "test-acl-scope"], ids=["default-tome", "other-tome"])
+def test_recall_as_scopes_results_by_acl_and_member_of(backend: Backend, tome: str | None) -> None:
+    asyncio.run(_recall_as_acl_scope(backend, tome))
 
 
 def test_facet_recalls_correctly_for_its_own_audience_alongside_root(backend: Backend) -> None:
@@ -717,7 +720,7 @@ async def _supersede_relationship(backend: Backend) -> None:
         await forget("ent_coffee.json", tome=None)
 
 
-async def _recall_as_acl_scope(backend: Backend) -> None:
+async def _recall_as_acl_scope(backend: Backend, tome: str | None) -> None:
     from connectomemcp.server import (
         Entity,
         Relationship,
@@ -737,7 +740,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="fact",
             acl=None,
             derived_from=None,
-            tome=None,
+            tome=tome,
             occurred_at=None,
             generated_by=None,
             sources=None,
@@ -753,7 +756,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=None,
             derived_from=None,
-            tome=None,
+            tome=tome,
             occurred_at=None,
             generated_by=None,
             sources=None,
@@ -767,7 +770,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=["Party A"],
             derived_from=None,
-            tome=None,
+            tome=tome,
             occurred_at=None,
             generated_by=None,
             sources=None,
@@ -781,7 +784,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             memory_type="note",
             acl=["GM"],
             derived_from=None,
-            tome=None,
+            tome=tome,
             occurred_at=None,
             generated_by=None,
             sources=None,
@@ -792,7 +795,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
     try:
         # --- member_of, special-cased from the relationship, merges onto the ---
         # --- entity record without introducing a new primitive -----------------
-        alice_entity = json.loads(await get_memory("ent_alice.json", tome=None))
+        alice_entity = json.loads(await get_memory("ent_alice.json", tome=tome))
         alice_record = json.loads(alice_entity["content"])
         assert alice_record["member_of"] == ["Party A"]
 
@@ -811,7 +814,7 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     occurred_until=None,
                     hydrate=False,
                     as_="alice",
-                    tome=None,
+                    tome=tome,
                 )
             )["results"]
         }
@@ -834,15 +837,15 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
                     occurred_until=None,
                     hydrate=False,
                     as_=None,
-                    tome=None,
+                    tome=tome,
                 )
             )["results"]
         }
         assert {open_key, party_key, gm_key} <= unscoped
     finally:
         for key in (membership_key, open_key, party_key, gm_key):
-            await forget(key, tome=None)
-        await forget("ent_alice.json", tome=None)
+            await forget(key, tome=tome)
+        await forget("ent_alice.json", tome=tome)
 
 
 async def _facet_recall(backend: Backend) -> None:
