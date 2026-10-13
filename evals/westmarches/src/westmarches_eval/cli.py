@@ -18,7 +18,7 @@ and writes results/<run-id>.json, `westmarches-eval answer <run-id> ...`
 scores answers from that file, and `westmarches-eval cleanup <run-id>`
 destroys the tome.
 
---fail-on-leak exits with status 1 when any result leaked, for CI.
+--fail-on-leak exits with status 1 when any result leaked.
 """
 
 import argparse
