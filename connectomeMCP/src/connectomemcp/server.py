@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime
+from importlib.metadata import version
 from io import BytesIO
 from pathlib import Path
 from typing import Literal, get_args
@@ -10,12 +11,14 @@ import httpx
 import yaml
 from dotenv import load_dotenv
 from mcp.server import MCPServer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_API_BASE_URL = "http://localhost:8080/api/connectome"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 USER_AGENT = "connectome/0.1.0"
-MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
+MEMORY_SCHEMA_VERSION = "connectome/memory/0.2"
+# The only older schema version upgrade_memory_metadata knows how to read.
+LEGACY_MEMORY_SCHEMA_VERSION = "connectome/memory/0.1"
 
 # The kind of thing a memory records. Kept deliberately small; extend as real
 # usage demands rather than guessing up front.
@@ -27,9 +30,10 @@ MemoryType = Literal["note", "fact", "preference", "event"]
 MEMORY_TYPES: tuple[str, ...] = get_args(MemoryType)
 DEFAULT_MEMORY_TYPE: MemoryType = "note"
 
-# Identifies where a memory came from. Every memory written through this server
-# originates from an MCP client.
-MEMORY_SOURCE_TYPE = "mcp"
+# The default `generated.by` actor for memories written through this server.
+# Actors follow one convention: `<producer>/<version>` for agents and tools,
+# `human:<id>` for people, `process:<id>` for jobs.
+MEMORY_GENERATED_BY = f"connectomemcp/{version('connectomemcp')}"
 
 # The truth-status of a relationship claim. Lives on the relationship entry,
 # not the memory, so one memory can carry a fact and a rumor side by side.
@@ -88,11 +92,51 @@ class Relationship(BaseModel):
     kind: RelationshipKind = Field(default=DEFAULT_RELATIONSHIP_KIND, description="The truth-status of this claim: 'fact' for a settled claim, 'hypothesis' for an unconfirmed working guess, or 'rumor' for a reported but unverified claim.")
     superseded_by: str | None = Field(default=None, description="The id of the memory that supersedes/corrects this relationship claim, if any. Null means this relationship is current/active.")
 
-class MemorySource(BaseModel):
-    type: str
-    created_at: str
+class ActorStamp(BaseModel):
+    """OKF's {by, at} shape, used for `generated` and each `verified` entry."""
+
+    model_config = ConfigDict(extra="allow")
+
+    by: str
+    at: str
+
+class Source(BaseModel):
+    """Where a memory's content was extracted from, in OKF's `sources` shape."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = Field(default=None, description="A caller-defined identifier for the source within its resource, such as a transcript chunk id or turn id.")
+    resource: str | None = Field(default=None, description="The memory key (e.g. 'mem_abc.md') or URL the content was drawn from.")
+    title: str | None = Field(default=None, description="A human-readable label for the source, such as 'Session 14 transcript, 00:42-00:47'.")
+
+def upgrade_memory_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    """Return memory frontmatter in the current schema's shape.
+
+    A 0.1 document gains `generated` derived from its `source` block (by =
+    source.type, at = source.created_at) and loses `source`; a `verified`
+    written as a bare mapping becomes a one-element list. Mirrors upgrade in
+    backend/resources/memoryProvenance.go. Stored documents are never
+    migrated - this only shapes what a reader sees.
+    """
+    upgraded = dict(metadata)
+    if isinstance(upgraded.get("verified"), dict):
+        upgraded["verified"] = [upgraded["verified"]]
+    if upgraded.get("version") != LEGACY_MEMORY_SCHEMA_VERSION:
+        return upgraded
+    upgraded["version"] = MEMORY_SCHEMA_VERSION
+    source = upgraded.pop("source", None)
+    if "generated" not in upgraded and isinstance(source, dict):
+        upgraded["generated"] = {
+            "by": source.get("type"),
+            "at": source.get("created_at") or upgraded.get("created_at"),
+        }
+    return upgraded
 
 class MemoryMetadata(BaseModel):
+    # Keys this model doesn't declare are kept rather than dropped, as OKF
+    # requires of consumers.
+    model_config = ConfigDict(extra="allow")
+
     version: str = MEMORY_SCHEMA_VERSION
     id: str | None = None
     type: str
@@ -101,11 +145,22 @@ class MemoryMetadata(BaseModel):
     # record was written). None means unknown - see validate_occurred_at.
     occurred_at: str | None = None
 
-    source: MemorySource
+    # Who or what produced this memory, and when.
+    generated: ActorStamp
+    # Who confirmed this memory's content, and when. Separate from a
+    # relationship's `kind`, which says what kind of claim it is.
+    verified: list[ActorStamp] | None = None
+    # Extraction provenance: what this memory's content was drawn from.
+    sources: list[Source] | None = None
     entities: list[str] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
     acl: list[str] | None = None
     derived_from: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade(cls, data: object) -> object:
+        return upgrade_memory_metadata(data) if isinstance(data, dict) else data
 
 class Memory(BaseModel):
     id: str
@@ -177,6 +232,8 @@ def format_memory(
     acl: list[str] | None = None,
     derived_from: str | None = None,
     occurred_at: str | None = None,
+    generated_by: str | None = None,
+    sources: list[Source] | None = None,
 ) -> tuple[str, dict[str, object]]:
     validate_occurred_at(occurred_at)
     metadata = MemoryMetadata(
@@ -184,13 +241,20 @@ def format_memory(
         type=memory_type,
         created_at=created_at,
         occurred_at=occurred_at,
-        source=MemorySource(type=MEMORY_SOURCE_TYPE, created_at=created_at),
+        generated=ActorStamp(by=generated_by or MEMORY_GENERATED_BY, at=created_at),
+        sources=sources or None,
         entities=[entity.id for entity in entities],
         relationships=relationships,
         acl=acl,
         derived_from=derived_from,
     )
     metadata_payload = metadata.model_dump(mode="json")
+    # verified and sources are optional: omit them rather than writing null.
+    del metadata_payload["verified"]
+    if metadata_payload["sources"] is None:
+        del metadata_payload["sources"]
+    else:
+        metadata_payload["sources"] = [source.model_dump(mode="json", exclude_none=True) for source in sources or []]
     if acl is None:
         # Omit the key entirely (rather than writing `acl: null`) so the Go
         # backend can tell "no acl given" apart from "explicitly cleared" and
@@ -328,6 +392,8 @@ async def remember(
     derived_from: str | None = Field(default=None, description="The id of another memory (e.g. 'mem_abc.md') this one is a facet of. A facet is an ordinary memory - stored, chunked, embedded, and ACL-filtered exactly like any other - that happens to record one entity's own version of the root memory's content. Use derived_from when the facet's *content* diverges from the root (a character's private take on a shared event, a rumor vs. the settled fact); if the audience is merely narrower but the content agrees with the root, just tighten the root memory's own acl instead of creating a facet."),
     tome: str | None = Field(default=None, description="Scope this memory and its entity records to this tome id, storing them in their own namespace. Omit to use the default tome."),
     occurred_at: str | None = Field(default=None, description="RFC3339 timestamp for when the memory's described event actually happened, if known and different from now (e.g. an imported or backdated memory). Distinct from created_at, which always records when this record was written. Omit when the event time is unknown or is simply now."),
+    generated_by: str | None = Field(default=None, description="Overrides the actor recorded as having produced this memory. Use '<producer>/<version>' for an agent or tool, 'human:<id>' for a person, or 'process:<id>' for a job. Omit to record this MCP server."),
+    sources: list[Source] | None = Field(default=None, description="What this memory's content was extracted from, such as the transcript chunk or conversation turns it was drawn from. This is extraction provenance; use derived_from only for a facet of another memory."),
 ) -> str:
     """Create a memory document, merge its ID into related entity records, and return JSON with the memory key, structured memory payload, and entity keys."""
     # TODO: Check if memory already exists and update if found
@@ -347,6 +413,8 @@ async def remember(
         acl,
         derived_from,
         occurred_at,
+        generated_by,
+        sources,
     )
 
     # Merge member_of onto its subject entity record via the shared backend
@@ -421,6 +489,23 @@ async def supersede_relationship(
     if tome is not None:
         body["tome"] = tome
     response = await request("PATCH", "/memory/relationship", json_body=body)
+    return response.text
+
+
+@mcp.tool()
+async def verify(
+    memory_id: str = Field(description="The memory key (e.g. 'mem_abc.md') whose content is being confirmed."),
+    by: str = Field(description="The actor confirming the memory: 'human:<id>' for a person, 'process:<id>' for a job, or '<producer>/<version>' for an agent or tool."),
+    at: str | None = Field(default=None, description="RFC3339 timestamp for when the confirmation happened. Omit for now."),
+    tome: str | None = Field(default=None, description="The tome id memory_id is scoped to. Must match the tome it was written with. Omit for the default tome."),
+) -> str:
+    """Record that an actor confirmed an existing memory's content by appending to its verified list, in place, without touching its content or triggering re-embedding, and return the backend JSON response."""
+    body: dict[str, object] = {"key": memory_id, "by": by}
+    if at is not None:
+        body["at"] = at
+    if tome is not None:
+        body["tome"] = tome
+    response = await request("PATCH", "/memory/verified", json_body=body)
     return response.text
 
 

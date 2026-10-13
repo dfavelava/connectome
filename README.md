@@ -154,6 +154,7 @@ POST   /api/connectome/memory/batch/read
 GET    /api/connectome/memory/list
 DELETE /api/connectome/memory/
 PATCH  /api/connectome/memory/relationship
+PATCH  /api/connectome/memory/verified
 POST   /api/llm/embed
 ```
 

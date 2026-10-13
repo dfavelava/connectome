@@ -5,10 +5,11 @@ import pytest
 import yaml
 
 from connectomeclient import (
+    DEFAULT_GENERATED_BY,
     DEFAULT_MEMORY_TYPE,
-    DEFAULT_SOURCE_TYPE,
     MEMORY_SCHEMA_VERSION,
     ConnectomeClient,
+    upgrade_memory_metadata,
 )
 
 
@@ -84,7 +85,12 @@ async def test_remember_posts_a_valid_memory_document(patch_async_client):
     assert metadata["version"] == MEMORY_SCHEMA_VERSION
     assert metadata["type"] == DEFAULT_MEMORY_TYPE
     assert metadata["entities"] == ["david"]
-    assert metadata["source"]["type"] == DEFAULT_SOURCE_TYPE
+    assert MEMORY_SCHEMA_VERSION == "connectome/memory/0.2"
+    assert metadata["generated"] == {"by": DEFAULT_GENERATED_BY, "at": metadata["created_at"]}
+    assert DEFAULT_GENERATED_BY.startswith("connectomeclient/")
+    assert "source" not in metadata
+    assert "verified" not in metadata
+    assert "sources" not in metadata
     assert "acl" not in metadata
     assert content.strip("\n") == "hello world"
 
@@ -106,7 +112,7 @@ async def test_remember_uses_the_client_supplied_source_type(patch_async_client)
     frontmatter_yaml = document.split("---\n", 2)[1]
     metadata = yaml.safe_load(frontmatter_yaml)
 
-    assert metadata["source"]["type"] == "discord"
+    assert metadata["generated"]["by"] == "discord"
 
 
 async def test_remember_includes_relationships_when_given(patch_async_client):
@@ -299,7 +305,7 @@ async def test_remember_front_matter_matches_mcp_key_layout(patch_async_client):
         "type",
         "created_at",
         "occurred_at",
-        "source",
+        "generated",
         "entities",
         "relationships",
         "acl",
@@ -776,3 +782,84 @@ async def test_recall_omits_ranking_by_default(patch_async_client):
     _ = await client.recall("tea")
 
     assert "ranking" not in json.loads(last_request(patch_async_client).content)
+
+
+def remembered_metadata(fixture) -> dict:
+    body = last_request(fixture).content.decode("utf-8")
+    document = body.split("\r\n\r\n", 1)[1].rsplit("\r\n--", 1)[0]
+    return yaml.safe_load(document.split("---\n", 2)[1])
+
+
+async def test_remember_writes_generated_by_and_sources(patch_async_client):
+    client = make_client(generated_by="discordbot/1.2.0", source_type="discord")
+    sources = [{"id": "chunk-12", "resource": "mem_transcript.md", "title": "Session 14 transcript, 00:42-00:47"}]
+
+    _ = await client.remember("hello", sources=sources)
+    metadata = remembered_metadata(patch_async_client)
+    assert metadata["generated"]["by"] == "discordbot/1.2.0"
+    assert metadata["sources"] == sources
+    # Provenance sits between occurred_at and entities, as format_memory writes it.
+    keys = list(metadata)
+    assert keys[keys.index("occurred_at") + 1 : keys.index("entities")] == ["generated", "sources"]
+
+    _ = await client.remember("hello", generated_by="human:discord-1234")
+    assert remembered_metadata(patch_async_client)["generated"]["by"] == "human:discord-1234"
+
+
+async def test_verify_patches_the_verified_route(patch_async_client):
+    set_handler(patch_async_client, lambda request: httpx.Response(200, json={"message": "success"}))
+    client = make_client()
+
+    result = await client.verify("mem_abc.md", "human:discord-1234", at="2026-10-06T19:00:00Z", tome="west-marches")
+
+    request = last_request(patch_async_client)
+    assert request.method == "PATCH"
+    assert str(request.url) == "http://example.test/api/connectome/memory/verified"
+    assert json.loads(request.content) == {
+        "key": "mem_abc.md",
+        "by": "human:discord-1234",
+        "at": "2026-10-06T19:00:00Z",
+        "tome": "west-marches",
+    }
+    assert result == {"message": "success"}
+
+    _ = await client.verify("mem_abc.md", "human:discord-1234")
+    assert json.loads(last_request(patch_async_client).content) == {"key": "mem_abc.md", "by": "human:discord-1234"}
+
+
+def test_upgrade_memory_metadata_derives_generated_from_legacy_source():
+    legacy = {
+        "version": "connectome/memory/0.1",
+        "id": "mem_old.md",
+        "type": "fact",
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "source": {"type": "discord", "created_at": "2024-01-01T00:00:00+00:00"},
+        "entities": [],
+        "relationships": [],
+        "derived_from": None,
+    }
+
+    upgraded = upgrade_memory_metadata(legacy)
+
+    assert upgraded["version"] == MEMORY_SCHEMA_VERSION
+    assert upgraded["generated"] == {"by": "discord", "at": "2024-01-01T00:00:00+00:00"}
+    assert "source" not in upgraded
+    assert "verified" not in upgraded
+    assert "sources" not in upgraded
+    # The input is not mutated.
+    assert legacy["version"] == "connectome/memory/0.1"
+    assert "source" in legacy
+
+
+def test_upgrade_memory_metadata_leaves_current_documents_alone():
+    current = {
+        "version": MEMORY_SCHEMA_VERSION,
+        "generated": {"by": "process:session-pipeline", "at": "2026-10-06T18:00:00+00:00"},
+        "verified": {"by": "human:discord-1234", "at": "2026-10-06T19:00:00+00:00"},
+        "x_campaign": {"name": "west-marches"},
+    }
+
+    upgraded = upgrade_memory_metadata(current)
+
+    # A bare verified mapping counts as a one-element list.
+    assert upgraded == {**current, "verified": [current["verified"]]}

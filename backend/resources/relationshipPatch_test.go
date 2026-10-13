@@ -60,8 +60,12 @@ func TestPatchRelationshipSupersededBySetsMatchingEntryOnly(t *testing.T) {
 	}
 
 	// Untouched fields round-trip unchanged.
-	if out.ID != "mem_rel.md" || out.Version != "connectome/memory/0.1" || out.Type != "fact" {
-		t.Fatalf("expected id/version/type preserved, got %+v", out)
+	if out.ID != "mem_rel.md" || out.Type != "fact" {
+		t.Fatalf("expected id/type preserved, got %+v", out)
+	}
+	// The 0.1 input is rewritten as 0.2.
+	if out.Version != memorySchemaVersion {
+		t.Fatalf("expected version %q, got %q", memorySchemaVersion, out.Version)
 	}
 	if out.ACL == nil || len(*out.ACL) != 1 || (*out.ACL)[0] != "GM" {
 		t.Fatalf("expected acl [GM] preserved, got %v", out.ACL)

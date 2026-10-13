@@ -8,12 +8,14 @@ from connectomemcp.server import (
     DEFAULT_MEMORY_TYPE,
     DEFAULT_RELATIONSHIP_KIND,
     MEMBER_OF_PREDICATE,
+    MEMORY_GENERATED_BY,
     MEMORY_SCHEMA_VERSION,
-    MEMORY_SOURCE_TYPE,
     MEMORY_TYPES,
     Entity,
     EntityWithMemories,
+    MemoryMetadata,
     Relationship,
+    Source,
     assert_member_of_relationships,
     format_memory,
     merge_kind,
@@ -46,7 +48,10 @@ def test_format_memory_produces_parseable_frontmatter():
     assert post["type"] == "preference"
     assert post["created_at"] == CREATED_AT
     assert post["entities"] == ["david"]
-    assert post["source"] == {"type": MEMORY_SOURCE_TYPE, "created_at": CREATED_AT}
+    assert post["generated"] == {"by": MEMORY_GENERATED_BY, "at": CREATED_AT}
+    assert "source" not in post.metadata
+    assert "verified" not in post.metadata
+    assert "sources" not in post.metadata
     assert post["relationships"] == [
         {
             "subjectEntityId": "david",
@@ -71,7 +76,7 @@ def test_format_memory_defaults_type_and_handles_no_entities():
     assert post["type"] == DEFAULT_MEMORY_TYPE == "note"
     assert post["entities"] == []
     assert post["relationships"] == []
-    assert post["source"]["type"] == MEMORY_SOURCE_TYPE
+    assert post["generated"]["by"] == MEMORY_GENERATED_BY
     assert payload["metadata"]["type"] == "note"
 
 
@@ -355,3 +360,77 @@ def test_assert_member_of_relationships_posts_only_member_of_with_an_object(monk
             },
         )
     ]
+
+
+def test_schema_version_and_default_actor():
+    assert MEMORY_SCHEMA_VERSION == "connectome/memory/0.2"
+    assert MEMORY_GENERATED_BY.startswith("connectomemcp/")
+
+
+def test_format_memory_writes_generated_by_override_and_sources():
+    document, payload = format_memory(
+        "mem_extracted.md",
+        "body",
+        [],
+        [],
+        CREATED_AT,
+        generated_by="process:session-pipeline",
+        sources=[
+            Source(id="chunk-12", resource="mem_transcript.md", title="Session 14 transcript, 00:42-00:47"),
+            Source(resource="https://example.test/notes"),
+        ],
+    )
+
+    post = frontmatter.loads(document)
+
+    assert post["generated"] == {"by": "process:session-pipeline", "at": CREATED_AT}
+    # Unset source keys are omitted rather than written as null.
+    assert post["sources"] == [
+        {"id": "chunk-12", "resource": "mem_transcript.md", "title": "Session 14 transcript, 00:42-00:47"},
+        {"resource": "https://example.test/notes"},
+    ]
+    assert payload["metadata"] == post.metadata
+
+
+LEGACY_METADATA = {
+    "version": "connectome/memory/0.1",
+    "id": "mem_old.md",
+    "type": "fact",
+    "created_at": CREATED_AT,
+    "source": {"type": "mcp", "created_at": CREATED_AT},
+    "entities": ["david"],
+    "relationships": [],
+    "derived_from": None,
+}
+
+
+def test_legacy_metadata_reads_as_current_with_generated_from_source():
+    metadata = MemoryMetadata.model_validate(LEGACY_METADATA)
+
+    assert metadata.version == MEMORY_SCHEMA_VERSION
+    assert metadata.generated.by == "mcp"
+    assert metadata.generated.at == CREATED_AT
+    assert metadata.verified is None
+    assert metadata.sources is None
+    assert "source" not in metadata.model_dump()
+    # The input is not mutated.
+    assert LEGACY_METADATA["version"] == "connectome/memory/0.1"
+    assert "source" in LEGACY_METADATA
+
+
+def test_metadata_accepts_bare_verified_mapping_and_keeps_unknown_keys():
+    metadata = MemoryMetadata.model_validate(
+        {
+            "version": MEMORY_SCHEMA_VERSION,
+            "id": "mem_new.md",
+            "type": "fact",
+            "created_at": CREATED_AT,
+            "generated": {"by": "process:session-pipeline", "at": CREATED_AT},
+            "verified": {"by": "human:discord-1234", "at": CREATED_AT},
+            "x_campaign": {"name": "west-marches"},
+        }
+    )
+
+    assert metadata.verified is not None
+    assert [entry.by for entry in metadata.verified] == ["human:discord-1234"]
+    assert metadata.model_dump()["x_campaign"] == {"name": "west-marches"}

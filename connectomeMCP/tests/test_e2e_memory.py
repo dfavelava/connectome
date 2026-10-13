@@ -151,6 +151,10 @@ def test_supersede_relationship_patches_in_place(backend: Backend) -> None:
     asyncio.run(_supersede_relationship(backend))
 
 
+def test_provenance_survives_verify_and_supersede(backend: Backend) -> None:
+    asyncio.run(_provenance(backend))
+
+
 def test_recall_as_scopes_results_by_acl_and_member_of(backend: Backend) -> None:
     asyncio.run(_recall_as_acl_scope(backend))
 
@@ -187,6 +191,8 @@ async def _roundtrip(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     memory_key = first["key"]
@@ -199,13 +205,17 @@ async def _roundtrip(backend: Backend) -> None:
         assert memory_path.is_file(), "memory file was not written to the local FS"
 
         metadata, body = _parse_frontmatter(memory_path.read_text())
-        assert metadata["version"] == "connectome/memory/0.1"
+        assert metadata["version"] == "connectome/memory/0.2"
         assert metadata["id"] == memory_key
         assert metadata["type"] == "fact"
         assert metadata["entities"] == ["ada"]
         assert metadata["relationships"] == []
         assert metadata["created_at"]
-        assert "source" in metadata
+        assert "source" not in metadata
+        assert metadata["generated"]["by"].startswith("connectomemcp/")
+        assert metadata["generated"]["at"] == metadata["created_at"]
+        assert "verified" not in metadata
+        assert "sources" not in metadata
         assert body == "Ada enjoys analytical engines."
 
         entity_path = backend.connectome_dir / "ent_ada.json"
@@ -226,6 +236,8 @@ async def _roundtrip(backend: Backend) -> None:
                 derived_from=None,
                 tome=None,
                 occurred_at=None,
+                generated_by=None,
+                sources=None,
             )
         )
         second_key = second["key"]
@@ -277,6 +289,8 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     key = first["key"]
@@ -299,6 +313,8 @@ async def _kind_and_meta_merge(backend: Backend) -> None:
                 derived_from=None,
                 tome=None,
                 occurred_at=None,
+                generated_by=None,
+                sources=None,
             )
         )
         second_key = second["key"]
@@ -335,6 +351,8 @@ async def _recall_roundtrip(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     ada_fact = json.loads(
@@ -347,6 +365,8 @@ async def _recall_roundtrip(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     grace_fact = json.loads(
@@ -359,6 +379,8 @@ async def _recall_roundtrip(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     tea_key, ada_key, grace_key = tea["key"], ada_fact["key"], grace_fact["key"]
@@ -426,6 +448,8 @@ async def _recall_tome_scope(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     memory_key = stored["key"]
@@ -495,6 +519,8 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     memory_key = result["key"]
@@ -525,6 +551,75 @@ async def _stub_entities_and_acl(backend: Backend) -> None:
         await forget("ent_grace.json", tome=None)
 
 
+async def _provenance(backend: Backend) -> None:
+    from connectomemcp.server import (
+        Entity,
+        Relationship,
+        Source,
+        forget,
+        get_memory,
+        remember,
+        supersede_relationship,
+        verify,
+    )
+
+    sources = [{"id": "chunk-12", "resource": "mem_transcript.md", "title": "Session 14 transcript, 00:42-00:47"}]
+    result = json.loads(
+        await remember(
+            content="David likes tea.",
+            entities=[Entity(id="david", name="David")],
+            relationships=[Relationship(subjectEntityId="david", predicate="likes", objectEntityId="tea")],
+            memory_type="fact",
+            acl=None,
+            derived_from=None,
+            tome=None,
+            occurred_at=None,
+            generated_by="process:session-pipeline",
+            sources=[Source(**sources[0])],
+        )
+    )
+    memory_key = result["key"]
+
+    try:
+        written, body = _parse_frontmatter((backend.connectome_dir / memory_key).read_text())
+        assert written["generated"] == {"by": "process:session-pipeline", "at": written["created_at"]}
+        assert written["sources"] == sources
+        assert written["derived_from"] is None
+
+        # --- verify appends to the verified list, in place -----------------------
+        await verify(memory_id=memory_key, by="human:discord-1234", at="2026-10-06T19:00:00Z", tome=None)
+        await verify(memory_id=memory_key, by="human:discord-5678", at=None, tome=None)
+
+        # --- a relationship patch keeps every provenance field -------------------
+        await supersede_relationship(
+            memory_id=memory_key,
+            subjectEntityId="david",
+            predicate="likes",
+            objectEntityId="tea",
+            superseded_by="mem_correction.md",
+            tome=None,
+        )
+
+        patched = json.loads(await get_memory(memory_key, tome=None))
+        metadata, patched_body = _parse_frontmatter(patched["content"])
+        assert patched_body == body
+        assert metadata["version"] == "connectome/memory/0.2"
+        assert metadata["generated"] == written["generated"]
+        assert metadata["sources"] == sources
+        assert [entry["by"] for entry in metadata["verified"]] == ["human:discord-1234", "human:discord-5678"]
+        assert metadata["verified"][0]["at"] == "2026-10-06T19:00:00Z"
+        assert metadata["verified"][1]["at"]
+        assert metadata["relationships"][0]["superseded_by"] == "mem_correction.md"
+
+        # --- a malformed timestamp is rejected -----------------------------------
+        with pytest.raises(httpx.HTTPStatusError):
+            await verify(memory_id=memory_key, by="human:discord-1234", at="yesterday", tome=None)
+    finally:
+        await forget(memory_key, tome=None)
+        await forget("ent_david.json", tome=None)
+        await forget("ent_tea.json", tome=None)
+
+
 async def _supersede_relationship(backend: Backend) -> None:
     from connectomemcp.server import (
         Entity,
@@ -550,6 +645,8 @@ async def _supersede_relationship(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     memory_key = result["key"]
@@ -642,6 +739,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     membership_key = membership["key"]
@@ -656,6 +755,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     party_memory = json.loads(
@@ -668,6 +769,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     gm_memory = json.loads(
@@ -680,6 +783,8 @@ async def _recall_as_acl_scope(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     open_key, party_key, gm_key = open_memory["key"], party_memory["key"], gm_memory["key"]
@@ -753,6 +858,8 @@ async def _facet_recall(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     root_key = root["key"]
@@ -767,6 +874,8 @@ async def _facet_recall(backend: Backend) -> None:
             derived_from=root_key,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     facet_key = facet["key"]
@@ -855,6 +964,8 @@ async def _tome_scoping(backend: Backend) -> None:
             derived_from=None,
             tome=tome,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     memory_key = result["key"]
@@ -922,6 +1033,8 @@ async def _recall_occurred_at_filter(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=old_occurred_at,
+            generated_by=None,
+            sources=None,
         )
     )
     # recent has no occurred_at at all.
@@ -935,6 +1048,8 @@ async def _recall_occurred_at_filter(backend: Backend) -> None:
             derived_from=None,
             tome=None,
             occurred_at=None,
+            generated_by=None,
+            sources=None,
         )
     )
     old_key, recent_key = old["key"], recent["key"]
