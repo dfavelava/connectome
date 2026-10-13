@@ -148,13 +148,18 @@ question's hits and contexts in both modes, and stores its scores there under
 sha256s, `answer_k`, sampling options). `retrieve` refuses a run whose tome
 was destroyed or whose campaign file changed since it was ingested.
 
-### CI
+### Not in CI
 
-The `West Marches eval` job in `.github/workflows/ci.yml` runs the tests,
-then builds and starts the backend against Postgres and Ollama
-(`nomic-embed-text` only) and runs `westmarches-eval --fail-on-leak`. Leakage
-needs no LLM, so every pull request checks it. The job's log also holds that
-commit's staleness, perspective and graph recall.
+The eval runs by hand, not in CI. The acl filtering it checks for leakage is
+already covered there, more cheaply and exhaustively: against Postgres in
+`TestEmbeddingsDaoSearchFiltersByACLScope` (`backend/daos`), in the
+`resolveACLScope` tests (`backend/resources`), and end to end, in the default
+tome and a scratch one, by
+`test_recall_as_scopes_results_by_acl_and_member_of` (`connectomeMCP`). The
+eval only samples leakage (each question's top k), and its other scores
+depend on the embedding model and Ollama version, so they are a baseline to
+record from a pinned run, not a gate. Run it with `--fail-on-leak` after a
+change to search, acls or tomes.
 
 ### How results map to the roadmap
 
